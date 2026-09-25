@@ -1,0 +1,41 @@
+@import url("/static/benchmark.css");
+
+.brand > b { width: 38px; font-size: 18px; }
+.brand > span { display: flex; align-items: baseline; gap: 8px; }
+.brand .brand-name { color: var(--ink); font: 600 20px "Newsreader", serif; }
+.brand-separator { color: var(--green); font-style: normal; font-weight: 700; }
+.brand-tagline { color: var(--muted); font-size: 12px; }
+.topbar-actions, .topbar nav { display: flex; align-items: center; gap: 14px; }
+.topbar nav { gap: 4px; }
+.topbar nav a { padding: 8px 11px; color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 700; border-bottom: 2px solid transparent; }
+.topbar nav a:hover, .topbar nav a.active { color: var(--ink); border-color: var(--green); }
+.intro h1 { font-size: clamp(34px, 4vw, 52px); }
+.confidence-panel { margin-top: 18px; }
+.confidence-panel header { align-items: start; }
+.confidence-panel canvas { display: block; width: 100%; height: 250px; }
+.legend { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.legend i { width: 18px; height: 8px; margin-left: 8px; }
+.legend .negative-key { background: var(--red); }
+.legend .positive-key { background: var(--green); }
+.matrix-stack { display: grid; gap: 24px; }
+.matrix-stack > div + div { padding-top: 20px; border-top: 1px solid var(--line); }
+.matrix-title { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
+.matrix-title span { color: var(--muted); }
+.matrix-stack .matrix-grid b { min-height: 66px; }
+#sample-state { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-library { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(240px, 1.35fr) auto; gap: 12px; align-items: end; padding: 14px 18px; border: 1px solid var(--line); border-top: 0; background: #f8faf6; }
+.run-library label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.run-library input, .run-library select { width: 100%; min-width: 0; height: 38px; padding: 0 10px; color: var(--ink); border: 1px solid var(--line); background: white; text-transform: none; }
+.run-library button { height: 38px; padding: 0 16px; border: 1px solid var(--ink); color: var(--ink); background: white; cursor: pointer; font-weight: 700; }
+.run-library button:disabled { cursor: not-allowed; opacity: .45; }
+
+@media (max-width: 720px) {
+  .brand-separator, .brand-tagline { display: none; }
+  .topbar-actions { gap: 5px; }
+  .topbar nav a { padding-inline: 6px; }
+  .service-state span { display: none; }
+  .confidence-panel header { display: block; }
+  .legend { margin-top: 10px; flex-wrap: wrap; }
+  .confidence-panel canvas { height: 220px; }
+  .run-library { grid-template-columns: 1fr auto; }
+}

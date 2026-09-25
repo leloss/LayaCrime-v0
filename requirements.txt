@@ -1,0 +1,2 @@
+# Runtime installation from a source checkout.
+-e .
