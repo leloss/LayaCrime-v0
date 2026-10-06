@@ -1,0 +1,17 @@
+.git
+.github
+.venv*
+.env*
+__pycache__
+.pytest_cache
+*.py[cod]
+artifacts
+models
+datasets/*
+!datasets/README.md
+!datasets/adverse-media-public-tuning-2000/
+!datasets/adverse-media-public-tuning-2000/**
+!datasets/adverse-media-public-holdout-1000/
+!datasets/adverse-media-public-holdout-1000/**
+third_party
+tests

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LayaCrime | Individual Test</title>
+  <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/individual-test.css?v=20261003-1">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><b><span>L</span><span class="crime">C</span></b><span><b class="brand-name">Laya<span class="crime">Crime</span></b><i class="brand-separator"> | </i><small class="brand-tagline">Individual Test</small></span></a>
+    <div class="topbar-actions">
+      <nav><a class="active" href="/">Test</a><a href="/benchmark">Benchmark</a><a href="/fine-tuning">Fine-tuning</a></nav>
+    </div>
+  </header>
+  <main>
+    <section class="intro">
+      <div><p class="eyebrow">Single-article inference</p><h1>Individual Test</h1><p>Compare one article against the base Laya model or any available fine-tuned LayaCrime checkpoint.</p></div>
+      <div class="selection-summary"><span>Active model</span><b id="active-model">Loading models...</b></div>
+    </section>
+
+    <form id="test-form" class="test-grid">
+      <section class="panel input-panel">
+        <header><div><span>Current sample</span><h2>Article and entity</h2></div><button class="primary" id="run-button" type="submit">Run test</button></header>
+        <div class="input-fields">
+          <label class="model-field"><span class="field-heading">Model <span class="model-health" id="model-health"><i></i><span id="model-status-label">Checking model</span></span></span><select id="model-id" required disabled><option>Loading available models...</option></select></label>
+          <label>Entity name<input id="entity-name" maxlength="500" placeholder="Acme Corporation" required></label>
+          <div class="prompt-control"><span>Inference prompt</span><p id="prompt-summary">Criminal behavior or intent · 2 criteria</p><button id="edit-prompt" type="button">Edit prompt</button></div>
+          <label>Article body<textarea id="article-text" maxlength="100000" placeholder="Paste the article text here..." required></textarea></label>
+        </div>
+        <div class="sample-meta"><span id="character-count">0 characters</span><span id="elapsed-time">Not run</span></div>
+      </section>
+
+      <section class="panel decision-panel" aria-live="polite">
+        <header><div><span>Model decision</span><h2 id="decision-title">Awaiting article</h2></div><b class="badge" id="review-state">Not run</b></header>
+        <div class="verdict"><span>Classification</span><b id="decision">-</b><small id="confidence">0.0% class probability · 0.0% certainty</small></div>
+        <div class="chart">
+          <div class="prob-row"><label><span>Negative association</span><b id="negative-value">0.0%</b></label><div><i class="negative" id="negative-bar"></i></div></div>
+          <div class="prob-row"><label><span>Positive / no association</span><b id="positive-value">0.0%</b></label><div><i class="positive" id="positive-bar"></i></div></div>
+        </div>
+        <dl class="result-facts">
+          <div><dt>Model</dt><dd id="result-model">-</dd></div>
+          <div><dt>Review</dt><dd id="review-detail">-</dd></div>
+          <div><dt>Inference time</dt><dd id="result-time">-</dd></div>
+        </dl>
+      </section>
+    </form>
+    <div class="error" id="error-message" hidden></div>
+  </main>
+  <dialog class="prompt-dialog" id="prompt-dialog">
+    <header><div><span>Inference settings</span><h2>Tweak prompt</h2></div><button class="dialog-close" id="prompt-close" type="button" aria-label="Close prompt editor">×</button></header>
+    <div class="prompt-dialog-body">
+      <label>Question template<textarea id="prompt-question" maxlength="4000" required></textarea><small><code>{entity_name}</code> is replaced with the entity above.</small></label>
+      <section><header><div><span>Decision rules</span><h3>Criteria</h3></div><button id="add-criterion" type="button">Add criterion</button></header><div id="criteria-list"></div></section>
+    </div>
+    <footer><button id="cancel-prompt" type="button">Cancel</button><button class="primary" id="save-prompt" type="button">Apply prompt</button></footer>
+  </dialog>
+  <script src="/static/individual-test.js?v=20261003-2" defer></script>
+</body>
+</html>

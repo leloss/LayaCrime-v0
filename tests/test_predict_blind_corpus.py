@@ -4,7 +4,6 @@ import json
 import sys
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).parents[1] / "scripts" / "predict_blind_corpus.py"
 SPEC = importlib.util.spec_from_file_location("predict_blind_corpus", SCRIPT)
 assert SPEC and SPEC.loader
@@ -21,7 +20,7 @@ class FakeResponse(io.StringIO):
         self.close()
 
 
-def test_request_prediction_maps_negative_to_bad_guy(monkeypatch) -> None:
+def test_request_prediction_maps_negative_label(monkeypatch) -> None:
     response = {
         "decision": "negative",
         "confidence": 0.8,
@@ -43,11 +42,11 @@ def test_request_prediction_maps_negative_to_bad_guy(monkeypatch) -> None:
 
     assert prediction["article_id"] == "abc"
     assert prediction["label"] == 2
-    assert prediction["label_name"] == "bad_guy"
-    assert prediction["annotator"] == "laya-router"
+    assert prediction["label_name"] == "negative"
+    assert prediction["producer"] == "laya-router"
 
 
-def test_format_prediction_maps_positive_to_good_guy() -> None:
+def test_format_prediction_maps_positive_label() -> None:
     prediction = MODULE.format_prediction(
         {"article_id": "xyz", "entity_name": "Acme", "article": "Acme was cleared."},
         {
@@ -60,7 +59,7 @@ def test_format_prediction_maps_positive_to_good_guy() -> None:
     )
 
     assert prediction["label"] == 1
-    assert prediction["label_name"] == "good_guy"
+    assert prediction["label_name"] == "positive"
     assert prediction["entity_name_literal_match"] is True
 
 

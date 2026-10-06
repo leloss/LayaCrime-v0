@@ -11,8 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
 
-
-LABELS = {"positive": (1, "good_guy"), "negative": (2, "bad_guy")}
+LABELS = {"positive": (1, "positive"), "negative": (2, "negative")}
 BATCH_QUESTIONS = {
     "criminal_association": {
         "type": "choice",
@@ -66,7 +65,7 @@ def format_prediction(article: dict, result: dict) -> dict:
         "probabilities": result["probabilities"],
         "needs_review": result["needs_review"],
         "routing": result.get("routing"),
-        "annotator": "laya-router",
+        "producer": "laya-router",
         "status": "model_predicted",
     })
 
@@ -168,7 +167,7 @@ def predict(args: argparse.Namespace) -> dict:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run blind adverse-media predictions through the local Laya server")
-    parser.add_argument("--corpus", type=Path, default=Path("artifacts/independent-annotations/blind_articles.jsonl"))
+    parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--endpoint", default="http://127.0.0.1:8000/v1/adverse-media")

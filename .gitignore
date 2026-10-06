@@ -1,19 +1,48 @@
+# Python environments, bytecode, and tool caches.
 .venv*/
+venv/
+env/
 __pycache__/
-.pytest_cache/
-.coverage
-htmlcov/
 *.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python package and native build products.
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Logs, temporary files, and operating-system/editor metadata.
 *.log
 *.tmp
+*.bak
+*.swp
+*~
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+
+# Local application state and credentials.
 data/
 logs/
 runs/
 wandb/
+nohup.out
 .env
 .env.*
 !.env.example
@@ -23,10 +52,43 @@ wandb/
 *.pt
 *.pth
 *.safetensors
+*.gguf
+*.ggml
+*.incomplete
+# Runtime downloads and all locally trained checkpoints stay out of releases.
 models/*
-!models/english/
-models/english/*
-!models/english/README.md
+!models/README.md
 third_party/
+# Predictions, prepared tensors, reports, and saved runs are always local.
 artifacts/
+# Annotation production and dataset-construction code lives in ../laya-annotations-private/.
+docs/annotation-rubric.md
+scripts/annotate_blind_corpus_azure.py
+scripts/build_annotation_corpus.py
+scripts/build_holdout_annotation.py
+scripts/build_public_datasets.py
+scripts/build_relational_dataset.py
+scripts/compare_source_labels.py
+scripts/extract_named_entities.py
+scripts/merge_annotations.py
+tests/test_annotate_blind_corpus_azure.py
+tests/test_build_annotation_corpus.py
+tests/test_build_holdout_annotation.py
+tests/test_build_public_datasets.py
+tests/test_build_relational_dataset.py
+tests/test_compare_source_labels.py
+tests/test_extract_named_entities.py
+tests/test_merge_annotations.py
+# Only the two reviewed public reproducibility bundles are release candidates.
+datasets/*
+!datasets/README.md
+!datasets/adverse-media-public-tuning-2000/
+!datasets/adverse-media-public-tuning-2000/**
+!datasets/adverse-media-public-holdout-1000/
+!datasets/adverse-media-public-holdout-1000/**
 docs/assets/crime-laya-[234].png
+docs/assets/*benchmark.png
+# Manuscript sources and generated article files are maintained outside the public release.
+paper/
+# One-time operator-reviewed cleanup helper for the staging host.
+remote-release-cleanup.sh

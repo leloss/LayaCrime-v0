@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "id": "adverse-media-public-tuning-2000",
+  "name": "Adverse Media Public Tuning 2,000",
+  "description": "Public natural-data tuning set with balanced human annotations.",
+  "purpose": "training-only",
+  "release_scope": "public",
+  "license": "Apache-2.0",
+  "redistribution_status": "cleared-for-public-release",
+  "recommended_training_strategy": "public_natural_staged",
+  "task": "adverse-media-entity-classification",
+  "prompt": {
+    "question": "How does this article portray {entity_name} regarding criminal behavior or intent? Judge only the named entity, not other people or organizations.",
+    "criteria": [
+      {
+        "decision": "negative",
+        "text": "negative: the article credibly associates the entity with alleged, investigated, charged, convicted, sanctioned, or admitted criminal behavior or intent"
+      },
+      {
+        "decision": "positive",
+        "text": "positive: the article does not associate the entity with criminal behavior or intent, or identifies the entity only as a victim, witness, investigator, or unrelated party"
+      }
+    ]
+  },
+  "corpus": {
+    "path": "corpus.jsonl",
+    "records": 2000,
+    "sha256": "1944465ac2d8d9fb80d6aff90dc2becda37e11de63ce177a23ed7b7eb13117e6",
+    "fields": [
+      "article_id",
+      "entity_name",
+      "article"
+    ]
+  },
+  "label_schema": {
+    "1": "positive",
+    "2": "negative"
+  },
+  "annotations": [
+    {
+      "id": "human",
+      "name": "Human annotations",
+      "path": "annotations/human.jsonl",
+      "records": 2000,
+      "sha256": "7a8cf5df843fa07797e545088eed56126194ef1e4f9067dfed1cc41953f73673",
+      "scope": "full",
+      "label_counts": {
+        "negative": 1000,
+        "positive": 1000
+      }
+    }
+  ],
+  "training_subsets": [],
+  "derivation": {
+    "seed": 20261001,
+    "source_dataset_id": "adverse-media-11610",
+    "article_id_overlap_with_public_peer": 0,
+    "normalized_article_overlap_with_public_peer": 0,
+    "records": 2000,
+    "labels": {
+      "negative": 1000,
+      "positive": 1000
+    },
+    "unique_entities": 610,
+    "maximum_entity_reuse": 4,
+    "entity_cap": 4,
+    "unique_normalized_articles": 2000,
+    "label_policy": "Human annotated",
+    "class_label_source": "human",
+    "augmentation": "none; original entity/article pairs only"
+  }
+}

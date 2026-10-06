@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import threading
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
-
 
 LABEL_NAMES = {1: "positive", 2: "negative"}
 SOURCE_LABELS = {"false positive": 1, "hit": 2}
@@ -23,7 +22,15 @@ def article_id(entity: str, article: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
 
 
-def load_source_labels(data_dir: Path) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
+def load_source_labels(data_dir: Path | None) -> tuple[dict[str, dict[str, Any]], dict[str, int | bool]]:
+    if data_dir is None or not data_dir.is_dir():
+        return {}, {
+            "files_seen": 0,
+            "usable_rows": 0,
+            "conflicts": 0,
+            "parse_errors": 0,
+            "available": False,
+        }
     grouped: dict[str, set[int]] = {}
     files_seen = 0
     parse_errors = 0
@@ -53,14 +60,14 @@ def load_source_labels(data_dir: Path) -> tuple[dict[str, dict[str, Any]], dict[
         grouped.setdefault(article_id(entity, article), set()).add(SOURCE_LABELS[disposition])
     conflicts = {identifier for identifier, labels in grouped.items() if len(labels) > 1}
     labels = {
-        identifier: {"article_id": identifier, "label": next(iter(values)), "annotator": "source disposition"}
+        identifier: {"article_id": identifier, "label": next(iter(values))}
         for identifier, values in grouped.items()
         if identifier not in conflicts
     }
-    return labels, {"files_seen": files_seen, "usable_rows": len(labels), "conflicts": len(conflicts), "parse_errors": parse_errors}
+    return labels, {"files_seen": files_seen, "usable_rows": len(labels), "conflicts": len(conflicts), "parse_errors": parse_errors, "available": True}
 
 
-def load_gpt_labels(gold_path: Path) -> dict[str, dict[str, Any]]:
+def load_gold_labels(gold_path: Path) -> dict[str, dict[str, Any]]:
     return {
         row["article_id"]: row
         for row in read_jsonl(gold_path)
@@ -68,19 +75,21 @@ def load_gpt_labels(gold_path: Path) -> dict[str, dict[str, Any]]:
     }
 
 
-def load_benchmark(corpus_path: Path, gold_path: Path, source_dir: Path) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
+def load_benchmark(corpus_path: Path, gold_path: Path, source_dir: Path | None) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
     articles = read_jsonl(corpus_path)
-    gpt_by_id = load_gpt_labels(gold_path)
+    gold_by_id = load_gold_labels(gold_path)
     human_by_id, source_audit = load_source_labels(source_dir)
-    annotators = Counter(str(row.get("annotator") or "unknown") for row in gpt_by_id.values())
-    return articles, gpt_by_id, human_by_id, {
+    annotators = Counter(
+        str(row.get("annotator") or "unknown") for row in gold_by_id.values()
+    )
+    return articles, gold_by_id, human_by_id, {
         "blind_articles": len(articles),
-        "usable_gold_rows": len(gpt_by_id),
+        "usable_gold_rows": len(gold_by_id),
         "human_gold_rows": len(human_by_id),
         "annotators": dict(sorted(annotators.items())),
         "source_audit": source_audit,
-        "corpus_path": corpus_path.as_posix() if not corpus_path.is_absolute() else corpus_path.name,
-        "gold_path": gold_path.as_posix() if not gold_path.is_absolute() else gold_path.name,
+        "corpus_path": str(corpus_path),
+        "gold_path": str(gold_path),
         "anti_leakage": "Laya receives only article and entity_name; gold is joined after inference.",
     }
 
@@ -98,11 +107,12 @@ class BenchmarkState:
             self.started_at: float | None = None
             self.finished_at: float | None = None
             self.inference_seconds = 0.0
-            self.matrices = {"human": [[0, 0], [0, 0]], "gpt": [[0, 0], [0, 0]]}
-            self.compared = {"human": 0, "gpt": 0}
+            self.matrices = {"human": [[0, 0], [0, 0]], "gold": [[0, 0], [0, 0]]}
+            self.compared = {"human": 0, "gold": 0}
             self.current: dict[str, Any] | None = None
             self.pending: dict[str, Any] | None = None
             self.predictions: dict[str, int] = {}
+            self.prediction_details: dict[str, dict[str, Any]] = {}
             self.probability_series: list[dict[str, float | int]] = []
             self.error: str | None = None
             self.pause_requested = False
@@ -116,11 +126,12 @@ class BenchmarkState:
                 self.started_at = time.perf_counter()
                 self.finished_at = None
                 self.inference_seconds = 0.0
-                self.matrices = {"human": [[0, 0], [0, 0]], "gpt": [[0, 0], [0, 0]]}
-                self.compared = {"human": 0, "gpt": 0}
+                self.matrices = {"human": [[0, 0], [0, 0]], "gold": [[0, 0], [0, 0]]}
+                self.compared = {"human": 0, "gold": 0}
                 self.current = None
                 self.pending = None
                 self.predictions = {}
+                self.prediction_details = {}
                 self.probability_series = []
                 self.error = None
                 self.audit = audit
@@ -132,6 +143,7 @@ class BenchmarkState:
             self.pending = {
                 "article_id": article["article_id"],
                 "entity_name": article["entity_name"],
+                "article": article["article"],
             }
 
     def record(self, article: dict[str, Any], prediction: dict[str, Any], truths: dict[str, dict[str, Any] | None], seconds: float) -> None:
@@ -144,12 +156,22 @@ class BenchmarkState:
             self.completed += 1
             self.inference_seconds += seconds
             self.predictions[article["article_id"]] = predicted_label
+            self.prediction_details[article["article_id"]] = {
+                "label": predicted_label,
+                "label_name": LABEL_NAMES[predicted_label],
+                "decision": prediction["decision"],
+                "confidence": prediction["confidence"],
+                "probabilities": dict(prediction["probabilities"]),
+                "needs_review": prediction.get("needs_review", False),
+                "routing": prediction.get("routing"),
+                "elapsed_seconds": seconds,
+            }
             self.probability_series.append({
                 "index": self.completed,
                 "negative": -100 * prediction["probabilities"]["negative"],
                 "positive": 100 * prediction["probabilities"]["positive"],
             })
-            display_gold = truths["gpt"] or truths["human"]
+            display_gold = truths["gold"] or truths["human"]
             self.current = {
                 "article_id": article["article_id"],
                 "entity_name": article["entity_name"],
@@ -168,13 +190,12 @@ class BenchmarkState:
                     "confidence": display_gold.get("confidence"),
                     "rationale": display_gold.get("rationale"),
                     "evidence": display_gold.get("evidence", []),
-                    "annotator": display_gold.get("annotator"),
-                    "source": "gpt" if truths["gpt"] else "human",
+                    "source": "external" if truths["gold"] else "source",
                 } if display_gold else None),
             }
             self.pending = None
 
-    def refresh_gpt(self, labels: dict[str, dict[str, Any]]) -> None:
+    def refresh_gold(self, labels: dict[str, dict[str, Any]]) -> None:
         with self._lock:
             matrix = [[0, 0], [0, 0]]
             compared = 0
@@ -183,16 +204,61 @@ class BenchmarkState:
                 if truth:
                     matrix[truth["label"] - 1][predicted - 1] += 1
                     compared += 1
-            self.matrices["gpt"] = matrix
-            self.compared["gpt"] = compared
+            self.matrices["gold"] = matrix
+            self.compared["gold"] = compared
             self.audit["usable_gold_rows"] = len(labels)
-            self.audit["annotators"] = dict(sorted(Counter(str(row.get("annotator") or "unknown") for row in labels.values()).items()))
+
+    def matching_results(
+        self,
+        articles: list[dict[str, Any]],
+        labels: dict[str, dict[str, Any]],
+        truth_label: int,
+        prediction_label: int,
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        with self._lock:
+            details = dict(self.prediction_details)
+        matches = []
+        for article in articles:
+            identifier = article["article_id"]
+            truth = labels.get(identifier)
+            prediction = details.get(identifier)
+            if (
+                truth is None
+                or prediction is None
+                or truth["label"] != truth_label
+                or prediction["label"] != prediction_label
+            ):
+                continue
+            matches.append({
+                "article_id": identifier,
+                "entity_name": article["entity_name"],
+                "article": article["article"],
+                "truth": {
+                    "label": truth["label"],
+                    "label_name": truth.get("label_name") or LABEL_NAMES[truth["label"]],
+                    "confidence": truth.get("confidence"),
+                    "rationale": truth.get("rationale"),
+                    "evidence": truth.get("evidence", []),
+                },
+                "prediction": prediction,
+                "correct": truth_label == prediction_label,
+            })
+        return {
+            "truth_label": truth_label,
+            "prediction_label": prediction_label,
+            "total": len(matches),
+            "offset": offset,
+            "limit": limit,
+            "items": matches[offset : offset + limit],
+        }
 
     def restore(
         self,
         rows: list[dict[str, Any]],
         articles: list[dict[str, Any]],
-        gpt_labels: dict[str, dict[str, Any]],
+        gold_labels: dict[str, dict[str, Any]],
         human_labels: dict[str, dict[str, Any]],
         audit: dict[str, Any],
         *,
@@ -221,7 +287,7 @@ class BenchmarkState:
                 "routing": row.get("routing"),
             }
             truths = {
-                "gpt": gpt_labels.get(article["article_id"]),
+                "gold": gold_labels.get(article["article_id"]),
                 "human": human_labels.get(article["article_id"]),
             }
             self.record(article, prediction, truths, float(row.get("elapsed_seconds", 0.0)))
@@ -244,6 +310,10 @@ class BenchmarkState:
     def should_pause(self) -> bool:
         with self._lock:
             return self.pause_requested
+
+    def has_prediction(self, article_id: str) -> bool:
+        with self._lock:
+            return article_id in self.predictions
 
     def paused(self) -> None:
         with self._lock:

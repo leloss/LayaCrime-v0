@@ -3,45 +3,57 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>CrimeLaya | Fine-Tuning Console</title>
+  <title>LayaCrime | Fine-Tuning Console</title>
+  <link rel="icon" href="/static/favicon.svg?v=2" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/fine-tuning.css">
+  <link rel="stylesheet" href="/static/fine-tuning.css?v=20261003-2">
+  <link rel="stylesheet" href="/static/resource-picker.css?v=2">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/"><b>CL</b><span><b class="brand-name">CrimeLaya</b><i class="brand-separator"> | </i><small class="brand-tagline">Fine-Tuning Console</small></span></a>
-    <nav><a href="/">Benchmark</a><a class="active" href="/fine-tuning">Fine-tuning</a></nav>
+    <a class="brand" href="/"><b><span>L</span><span class="crime">C</span></b><span><b class="brand-name">Laya<span class="crime">Crime</span></b><i class="brand-separator"> | </i><small class="brand-tagline">Fine-Tuning Console</small></span></a>
+    <nav><a href="/">Test</a><a href="/benchmark">Benchmark</a><a class="active" href="/fine-tuning">Fine-tuning</a></nav>
   </header>
   <main>
     <section class="intro">
-      <div><p class="eyebrow">Model operations</p><h1>Fine-Tuning Console</h1><p>Prepare an annotated criminality dataset and run the CrimeLaya training recipe on local GPUs.</p></div>
-      <div class="job-state" id="job-state"><i></i><span><small>Job state</small><b id="status-label">Idle</b></span></div>
+      <div><p class="eyebrow">Model operations</p><h1>Fine-Tuning Console</h1><p>Prepare an externally labeled criminality dataset and run the LayaCrime training recipe on local GPUs.</p></div>
+      <div class="job-state" id="job-state"><i></i><span><small>Job state</small><b id="job-status-label">Idle</b></span></div>
+    </section>
+
+    <section class="history-loader">
+      <label class="model-field"><span class="field-heading">Base checkpoint <span class="model-health" id="model-health"><i></i><span id="model-status-label">Checking inference model</span></span></span><select id="model-preset"><option value="">Loading available models...</option></select></label>
+      <label>Saved training<select id="training-report"><option value="">Loading completed trainings...</option></select></label>
+      <button id="load-training" disabled>Load training</button>
+      <button id="live-training" hidden>Return to live</button>
     </section>
 
     <div class="workspace">
       <div class="configuration">
         <section class="tool-section" id="dataset-section">
           <header><div><span>Step 1</span><h2>Dataset preparation</h2></div><button class="primary" id="prepare-button">Prepare dataset</button></header>
+          <div class="prompt-control"><div><span>Training prompt</span><b id="prompt-summary">Loading dataset prompt...</b></div><button id="edit-prompt" type="button">Edit prompt</button></div>
           <div class="field-grid">
-            <label>Label source<select id="label-source"><option value="azure">Consolidated annotations</option><option value="human">Source dispositions</option></select></label>
             <label>Random seed<input id="prepare-seed" type="number" min="0" value="20260923"></label>
-            <label class="wide azure-field">Corpus JSONL<input id="corpus" type="text" spellcheck="false"></label>
-            <label class="wide azure-field">Annotations JSONL<input id="annotations" type="text" spellcheck="false"></label>
-            <label class="wide human-field" hidden>Source dataset directory<input id="data-dir" type="text" spellcheck="false"></label>
-            <label class="wide">Base model directory<input id="prepare-model-dir" type="text" spellcheck="false"></label>
+            <label>Training set<select id="dataset-preset"><option value="">Custom external dataset</option></select></label>
+            <label class="wide">Preparation partition<select id="partition-strategy"><option value="holdout_80_20">Entity/article-disjoint holdout (80/20)</option><option value="holdout_70_30">Entity/article-disjoint holdout (70/30)</option><option value="holdout_60_40">Entity/article-disjoint holdout (60/40)</option><option value="holdout_50_50">Entity/article-disjoint holdout (50/50)</option><option value="group_k_fold">Grouped k-fold train/calibration</option><option value="leave_one_group_out">Leave-one-entity/article-group-out for calibration</option></select><small id="partition-description"></small></label>
+            <label id="fold-count-field">Number of folds<input id="fold-count" type="number" min="2" max="100" value="5"></label>
+            <label id="fold-index-field">Selected fold (zero-based)<input id="fold-index" type="number" min="0" value="0"></label>
+            <label class="wide">Corpus JSONL<input id="corpus" type="text" spellcheck="false"></label>
+            <label class="wide">Labels JSONL<input id="labels" type="text" spellcheck="false"></label>
+            <input id="prepare-model-dir" type="hidden">
             <label class="wide">Prepared dataset output<input id="prepared-output" type="text" spellcheck="false"></label>
           </div>
         </section>
 
         <section class="tool-section" id="training-section">
-          <header><div><span>Step 2</span><h2>GPU training</h2></div><div class="header-actions"><button class="danger" id="stop-button" disabled>Stop</button><button class="primary" id="train-button">Start training</button></div></header>
+          <header><div><span>Step 2</span><h2>GPU training</h2></div><div class="header-actions"><button id="reset-author-parameters" type="button" title="Restore the balanced strategy and operational defaults">Reset defaults</button><button class="danger" id="stop-button" disabled>Stop</button><button class="primary" id="train-button">Start training</button></div></header>
           <div class="field-grid compact">
             <label class="wide">Prepared dataset directory<input id="prepared-dir" type="text" spellcheck="false"></label>
-            <label class="wide">Base model directory<input id="train-model-dir" type="text" spellcheck="false"></label>
+            <input id="train-model-dir" type="hidden">
             <label class="wide">Fine-tuned model output<input id="model-output" type="text" spellcheck="false"></label>
-            <label class="wide">Resume checkpoint <small>Optional</small><input id="resume-from" type="text" spellcheck="false" placeholder="checkpoint_latest directory"></label>
+            <label class="wide strategy-field">Training strategy<select id="training-strategy"></select><small id="strategy-description"></small></label>
             <label>GPU processes<input id="gpu-count" type="number" min="1" max="16" value="1"></label>
             <label>Epochs<input id="epochs" type="number" min="1" value="4"></label>
             <label>Batch / GPU<input id="batch-size" type="number" min="1" value="4"></label>
@@ -52,11 +64,15 @@
           <details>
             <summary>Optimization parameters</summary>
             <div class="field-grid compact advanced">
-              <label>Encoder learning rate<input id="encoder-lr" type="number" min="0" step="0.000001" value="0.000025"></label>
-              <label>Head learning rate<input id="head-lr" type="number" min="0" step="0.00001" value="0.0001"></label>
+              <label>Encoder learning rate<input id="encoder-lr" type="number" min="0" step="0.000001" value="0.00001"></label>
+              <label>Head learning rate<input id="head-lr" type="number" min="0" step="0.00001" value="0.00005"></label>
+              <label>RL loss weight<input id="rl-weight" type="number" min="0" step="0.1" value="0"></label>
               <label>Weight decay<input id="weight-decay" type="number" min="0" step="0.001" value="0.01"></label>
               <label>Sigma start<input id="sigma-start" type="number" min="0" step="0.05" value="0.4"></label>
               <label>Sigma end<input id="sigma-end" type="number" min="0" step="0.05" value="0.1"></label>
+              <label>Head-only epochs<input id="encoder-warmup-epochs" type="number" min="0" step="1" value="0"></label>
+              <label>LR warmup ratio<input id="lr-warmup-ratio" type="number" min="0" max="0.5" step="0.05" value="0"></label>
+              <label>Label smoothing<input id="label-smoothing" type="number" min="0" max="0.49" step="0.01" value="0"></label>
               <label>Training seed<input id="train-seed" type="number" min="0" value="20260923"></label>
               <label>Log every batches<input id="log-every" type="number" min="1" value="50"></label>
             </div>
@@ -65,6 +81,10 @@
       </div>
 
       <aside class="monitor">
+        <div class="command-block"><span>Command</span><code id="command">No command launched.</code></div>
+        <div class="log-heading"><span>Process output</span><div class="log-actions"><button id="copy-log">Copy log</button><button id="clear-log">Clear view</button></div></div>
+        <pre id="process-log" aria-live="polite">Waiting for a preparation or training job.</pre>
+        <div class="error" id="error-message" hidden></div>
         <header><div><span>Live process</span><h2>Training monitor</h2></div><b class="status-badge" id="phase-badge">Idle</b></header>
         <dl class="process-facts">
           <div><dt>Phase</dt><dd id="phase">Not started</dd></div>
@@ -73,16 +93,55 @@
           <div><dt>Batch</dt><dd id="batch-progress">-</dd></div>
           <div><dt>Loss</dt><dd id="loss-progress">-</dd></div>
           <div><dt>Exploration sigma</dt><dd id="sigma-progress">-</dd></div>
-          <div><dt>Started</dt><dd id="started-at">-</dd></div>
+          <div><dt id="time-label">Started</dt><dd id="started-at">-</dd></div>
           <div><dt>Exit code</dt><dd id="exit-code">-</dd></div>
         </dl>
-        <div class="command-block"><span>Command</span><code id="command">No command launched.</code></div>
-        <div class="log-heading"><span>Process output</span><button id="clear-log">Clear view</button></div>
-        <pre id="process-log" aria-live="polite">Waiting for a preparation or training job.</pre>
-        <div class="error" id="error-message" hidden></div>
+        <section class="loss-chart">
+          <header><span>Loss by epoch</span><div class="loss-legend"><i class="train-key"></i>Training <i class="validation-key"></i>Validation</div></header>
+          <canvas id="loss-chart" height="220" aria-label="Training and validation loss curves by epoch"></canvas>
+          <div class="loss-values"><span>Epoch=<b id="loss-epoch-latest">-</b></span><span>Tr.=<b id="train-loss-latest">-</b></span><span>Val.=<b id="validation-loss-latest">-</b></span><span>Best Epoch=<b id="loss-best-epoch">-</b></span><span>Best Tr.=<b id="train-loss-best">-</b></span><span>Best Val.=<b id="validation-loss-best">-</b></span></div>
+        </section>
+        <section class="loss-chart">
+          <header><span>Accuracy by epoch</span><div class="loss-legend"><i class="validation-key"></i>Validation</div></header>
+          <canvas id="accuracy-chart" height="220" aria-label="Validation accuracy curve by epoch"></canvas>
+          <div class="loss-values"><span>Epoch=<b id="accuracy-epoch-latest">-</b></span><span>Tr.=<b id="train-accuracy-latest">-</b></span><span>Val.=<b id="validation-accuracy-latest">-</b></span><span>Best Epoch=<b id="accuracy-best-epoch">-</b></span><span>Best Tr.=<b id="train-accuracy-best">-</b></span><span>Best Val.=<b id="validation-accuracy-best">-</b></span></div>
+        </section>
+        <section class="training-results" id="training-results" hidden>
+          <header><span>Training summary</span><b id="report-name">-</b></header>
+          <dl class="result-stats">
+            <div><dt>Partition</dt><dd id="partition-result">-</dd></div>
+            <div><dt>Best epoch</dt><dd id="report-best-epoch">-</dd></div>
+            <div><dt>Validation accuracy</dt><dd id="report-validation-accuracy">-</dd></div>
+            <div><dt>Validation loss</dt><dd id="report-validation-loss">-</dd></div>
+            <div><dt>Temperature</dt><dd id="report-temperature">-</dd></div>
+          </dl>
+        </section>
       </aside>
     </div>
   </main>
-  <script src="/static/fine-tuning.js" defer></script>
+  <dialog class="hub-dialog" id="hub-dialog">
+    <form id="hub-form">
+      <header>
+        <div><p class="eyebrow">Optional backup</p><h2>Save to Hugging Face</h2></div>
+        <button class="dialog-close" id="hub-close" type="button" aria-label="Skip Hugging Face upload">&times;</button>
+      </header>
+      <div class="hub-fields">
+        <label>Model repository<input id="hub-repo-id" type="text" placeholder="username/model-name" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,95}\/[A-Za-z0-9][A-Za-z0-9._-]{0,95}" autocomplete="off" required></label>
+        <label>Write token<input id="hub-token" type="password" autocomplete="off" required></label>
+        <label class="visibility-option"><input id="hub-private" type="checkbox"><span>Private repository</span></label>
+      </div>
+      <footer><button id="hub-skip" type="button">Skip upload</button><button class="primary" type="submit">Train and upload</button></footer>
+    </form>
+  </dialog>
+  <dialog class="prompt-dialog" id="prompt-dialog">
+    <header><div><p class="eyebrow">Dataset metadata</p><h2>Training prompt</h2></div><button class="dialog-close" id="prompt-close" type="button" aria-label="Close prompt editor">&times;</button></header>
+    <div class="prompt-dialog-body">
+      <label>Question template<textarea id="prompt-question" maxlength="4000" required></textarea><small><code>{entity_name}</code> is replaced for every training example.</small></label>
+      <section><header><div><span>Decision rules</span><h3>Criteria</h3></div><button id="add-criterion" type="button">Add criterion</button></header><div id="criteria-list"></div></section>
+    </div>
+    <footer><button id="cancel-prompt" type="button">Cancel</button><button class="primary" id="save-prompt" type="button">Save to dataset</button></footer>
+  </dialog>
+  <script src="/static/resource-picker.js?v=2" defer></script>
+  <script src="/static/fine-tuning.js?v=20261004-3" defer></script>
 </body>
 </html>
