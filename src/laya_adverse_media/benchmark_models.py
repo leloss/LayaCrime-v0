@@ -37,6 +37,34 @@ Do not determine legal guilt or use outside knowledge. Resolve aliases only when
 Return only the required label. Do not provide a rationale, confidence, or probability."""
 
 
+def _parse_cloud_decision(output: Any) -> dict[str, Any]:
+    if isinstance(output, dict):
+        label = output.get("label")
+        if isinstance(label, str) and label.strip() in {"1", "2"}:
+            return {**output, "label": int(label.strip())}
+        return output
+    if isinstance(output, int) and not isinstance(output, bool):
+        return {"label": output}
+    if not isinstance(output, str):
+        raise ValueError(
+            f"Cloud model returned unsupported output type {type(output).__name__}"
+        )
+    text = output.strip()
+    if not text:
+        raise ValueError("Cloud model returned empty output")
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    label_match = re.fullmatch(
+        r"(?:label\s*[:=-]?\s*)?([12])(?:\s*[.!])?",
+        text,
+        re.IGNORECASE,
+    )
+    if label_match:
+        return {"label": int(label_match.group(1))}
+    return _parse_cloud_decision(json.loads(text))
+
+
 class _LlamaServerHTTPError(RuntimeError):
     def __init__(self, status: int, detail: str) -> None:
         self.status = status
@@ -48,6 +76,18 @@ class _LlamaServerResponseError(RuntimeError):
     def __init__(self, message: str, *, finish_reason: str | None = None) -> None:
         self.finish_reason = finish_reason
         super().__init__(message)
+
+
+class _LlamaServerTransportError(RuntimeError):
+    pass
+
+
+class TemporaryCloudModelError(RuntimeError):
+    pass
+
+
+class _CloudModelInvalidResponseError(ValueError):
+    status_code = 400
 
 
 @dataclass(frozen=True)
@@ -65,16 +105,59 @@ class BenchmarkModelSpec:
     source_repo_id: str | None = None
     huggingface_path: str | None = None
     custom: bool = False
+    azure_deployment: str | None = None
+    azure_reasoning_effort: Literal["low", "medium", "high"] | None = None
+    action_only: bool = False
+    action_label: str | None = None
+    azure_structured_output: bool = True
 
 
 BENCHMARK_MODELS = (
     BenchmarkModelSpec(
         "gpt-5-6-luna", "GPT-5.6-Luna", "azure", "Hosted high-quality baseline",
         input_usd_per_million=0.20, output_usd_per_million=1.20,
+        azure_deployment="gpt-5.6-luna",
+        azure_reasoning_effort="low",
     ),
     BenchmarkModelSpec(
         "gpt-5-4-nano", "GPT-5.4-Nano", "azure", "Hosted compact baseline",
         input_usd_per_million=0.20, output_usd_per_million=1.25,
+        azure_deployment="gpt-5.4-nano",
+        azure_reasoning_effort="low",
+    ),
+    BenchmarkModelSpec(
+        "grok-4-1-fast-reasoning", "Grok 4.1 Fast Reasoning", "azure",
+        "Hosted fast reasoning baseline",
+        input_usd_per_million=0.20, output_usd_per_million=0.50,
+        azure_deployment="grok-4-1-fast-reasoning",
+        azure_reasoning_effort="low",
+        azure_structured_output=False,
+    ),
+    BenchmarkModelSpec(
+        "grok-4-1-fast-non-reasoning", "Grok 4.1 Fast Non-Reasoning", "azure",
+        "Hosted fast non-reasoning baseline",
+        input_usd_per_million=0.20, output_usd_per_million=0.50,
+        azure_deployment="grok-4-1-fast-non-reasoning",
+        azure_structured_output=False,
+    ),
+    BenchmarkModelSpec(
+        "gpt-6-luna", "GPT-6 Luna", "azure", "Hosted high-quality baseline",
+        input_usd_per_million=0.10, output_usd_per_million=0.50,
+        azure_deployment="gpt-6-luna",
+        azure_reasoning_effort="low",
+    ),
+    BenchmarkModelSpec(
+        "deepseek-v4-1-flash", "DeepSeek V4.1 Flash", "azure",
+        "Hosted fast reasoning baseline",
+        input_usd_per_million=0.30, output_usd_per_million=1.20,
+        azure_deployment="DeepSeek-V4.1-Flash",
+        azure_structured_output=False,
+    ),
+    BenchmarkModelSpec(
+        "azure-custom-endpoint", "Custom cloud endpoint", "azure",
+        "User-supplied Azure or Foundry endpoint",
+        action_only=True,
+        action_label="Add endpoint…",
     ),
     BenchmarkModelSpec(
         "qwen3-8b-q6-k", "Qwen3 8B · Q6_K", "llama.cpp", "High-quality small dense",
@@ -113,6 +196,12 @@ BENCHMARK_MODELS = (
         "Dense T4 boundary; automatic CPU offload", "IQ4_XS", "15.48 GB",
         "bartowski/Qwen3.8-27B-GGUF", "Qwen3.8-27B-IQ4_XS.gguf",
         source_repo_id="Qwen/Qwen3.8-27B",
+    ),
+    BenchmarkModelSpec(
+        "ternary-bonsai-27b-q2-g64", "Ternary Bonsai 27B · Q2_g64", "llama.cpp",
+        "Native ternary 27B; upstream llama.cpp compatible", "Q2_g64", "7.59 GB",
+        "prism-ml/Ternary-Bonsai-27B-gguf", "Ternary-Bonsai-27B-Q2_g64.gguf",
+        source_repo_id="Qwen/Qwen3.6-27B",
     ),
     BenchmarkModelSpec(
         "qwen3-6-35b-a3b-q3-k-m", "Qwen3.6 35B A3B · Q3_K_M", "llama.cpp",
@@ -436,6 +525,7 @@ def benchmark_model_options(models_dir: Path, llama_server: str | None = None) -
             "category": "language",
             "credential_required": spec.provider == "azure",
             "installed": installed,
+            "installable": spec.provider == "llama.cpp",
             "installation_state": installation_state,
             "installation_error": installation_error,
             "deletable": spec.provider == "llama.cpp" and bool(spec.custom or (model_path and model_path.is_file())),
@@ -467,6 +557,11 @@ class GenerativeBenchmarkRuntime:
         self._unload_laya = unload_laya
         self._llama_server = llama_server
         self._process_factory = process_factory
+        self._request_timeout = float(
+            os.getenv("LAYA_GENERATIVE_REQUEST_TIMEOUT_SECONDS", "90")
+        )
+        if self._request_timeout <= 0:
+            raise ValueError("LAYA_GENERATIVE_REQUEST_TIMEOUT_SECONDS must be positive")
         self._require_gpu = (
             require_gpu
             if require_gpu is not None
@@ -514,7 +609,7 @@ class GenerativeBenchmarkRuntime:
 
             self._client = OpenAI(base_url=_openai_base_url(endpoint), api_key=api_key, max_retries=4)
             self._active = spec
-            self._deployment = deployment or spec.label.casefold()
+            self._deployment = deployment or spec.azure_deployment or spec.label.casefold()
             return spec.id
 
         llama_server = resolve_llama_server(self._llama_server)
@@ -548,7 +643,11 @@ class GenerativeBenchmarkRuntime:
             "--jinja", "--cors-origins", "localhost",
         ]
         if cuda_device:
-            command.extend(["--device", cuda_device, "--n-gpu-layers", "all"])
+            command.extend([
+                "--device", cuda_device,
+                "--fit", "on",
+                "--fit-target", "1024",
+            ])
         else:
             command.extend(["--n-gpu-layers", "99"])
         self._process = self._process_factory(command, stdout=self._log, stderr=subprocess.STDOUT)
@@ -600,15 +699,39 @@ class GenerativeBenchmarkRuntime:
         if self._active is None:
             raise RuntimeError("no generative benchmark model is active")
         if self._active.provider == "azure":
-            submitted = article[:50_000]
-            result, usage = self._predict_azure(submitted, entity_name)
+            candidate_limits = (
+                50_000,
+                32_000,
+                16_000,
+                8_000,
+                max(2_000, len(article) * 3 // 4),
+                max(1_000, len(article) // 2),
+                max(500, len(article) // 4),
+            )
+            limits = tuple(dict.fromkeys(min(len(article), limit) for limit in candidate_limits))
+            for attempt, limit in enumerate(limits):
+                submitted = article[:limit]
+                try:
+                    result, usage = self._predict_azure(submitted, entity_name)
+                    break
+                except Exception as exc:
+                    if getattr(exc, "status_code", None) != 400 or attempt == len(limits) - 1:
+                        raise
         else:
             limits = (50_000, 32_000, 16_000, 8_000)
+            transport_retried = False
             for attempt, limit in enumerate(limits):
                 submitted = article[:limit]
                 try:
                     result, usage = self._predict_local(submitted, entity_name)
                     break
+                except _LlamaServerTransportError:
+                    if transport_retried or attempt == len(limits) - 1:
+                        raise
+                    spec = self._active
+                    assert spec is not None
+                    self.activate(spec.id, spec=spec)
+                    transport_retried = True
                 except (_LlamaServerHTTPError, _LlamaServerResponseError) as exc:
                     retryable = (
                         exc.status == 400
@@ -644,24 +767,46 @@ class GenerativeBenchmarkRuntime:
         }
 
     def _predict_azure(self, article: str, entity_name: str) -> tuple[dict[str, Any], dict[str, int]]:
+        if not self._active.azure_structured_output:
+            return self._predict_azure_chat(article, entity_name)
         total_usage = {"input_tokens": 0, "output_tokens": 0}
         budgets = (4096, 8192)
         for attempt, max_output_tokens in enumerate(budgets):
-            response = self._client.responses.create(
-                model=self._deployment,
-                instructions=SYSTEM_PROMPT,
-                input=json.dumps(
+            request = {
+                "model": self._deployment,
+                "instructions": SYSTEM_PROMPT,
+                "input": json.dumps(
                     {"entity_name": entity_name, "article": article},
                     ensure_ascii=False,
                 ),
-                max_output_tokens=max_output_tokens,
-                reasoning={"effort": "low"},
-                store=False,
-                text={"format": {
+                "max_output_tokens": max_output_tokens,
+                "store": False,
+            }
+            if self._active.azure_reasoning_effort is not None:
+                request["reasoning"] = {"effort": self._active.azure_reasoning_effort}
+            if self._active.azure_structured_output:
+                request["text"] = {"format": {
                     "type": "json_schema", "name": "adverse_media_decision",
                     "strict": True, "schema": DECISION_SCHEMA,
-                }},
-            )
+                }}
+            try:
+                response = self._client.responses.create(**request)
+            except Exception as exc:
+                status = getattr(exc, "status_code", None)
+                message = str(exc).casefold()
+                transient = (
+                    status == 429
+                    or isinstance(status, int) and status >= 500
+                    or any(fragment in message for fragment in (
+                        "no_capacity", "high demand", "rate limit", "timed out",
+                        "timeout", "connection error", "service unavailable",
+                    ))
+                )
+                if transient:
+                    raise TemporaryCloudModelError(
+                        f"Cloud model temporarily unavailable; resume the benchmark to retry: {exc}"
+                    ) from exc
+                raise
             usage = getattr(response, "usage", None)
             total_usage["input_tokens"] += int(
                 getattr(usage, "input_tokens", 0) or 0
@@ -670,7 +815,7 @@ class GenerativeBenchmarkRuntime:
                 getattr(usage, "output_tokens", 0) or 0
             )
             if response.status == "completed":
-                return json.loads(response.output_text), total_usage
+                return _parse_cloud_decision(response.output_text), total_usage
             reason = getattr(
                 getattr(response, "incomplete_details", None), "reason", "unknown"
             )
@@ -680,8 +825,77 @@ class GenerativeBenchmarkRuntime:
                 )
         raise RuntimeError("Azure response did not complete")
 
+    def _predict_azure_chat(
+        self, article: str, entity_name: str
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        total_usage = {"input_tokens": 0, "output_tokens": 0}
+        for attempt, max_tokens in enumerate((512, 2048)):
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._deployment,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": json.dumps(
+                            {"entity_name": entity_name, "article": article},
+                            ensure_ascii=False,
+                        )},
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=0,
+                )
+            except json.JSONDecodeError as exc:
+                if attempt == 0:
+                    continue
+                raise _CloudModelInvalidResponseError(
+                    "Cloud model returned an empty or invalid HTTP response body"
+                ) from exc
+            except Exception as exc:
+                status = getattr(exc, "status_code", None)
+                message = str(exc).casefold()
+                transient = (
+                    status == 429
+                    or isinstance(status, int) and status >= 500
+                    or any(fragment in message for fragment in (
+                        "no_capacity", "high demand", "rate limit", "timed out",
+                        "timeout", "connection error", "service unavailable",
+                    ))
+                )
+                if transient:
+                    raise TemporaryCloudModelError(
+                        f"Cloud model temporarily unavailable; resume the benchmark to retry: {exc}"
+                    ) from exc
+                raise
+            usage = getattr(response, "usage", None)
+            total_usage["input_tokens"] += int(
+                getattr(usage, "prompt_tokens", 0) or 0
+            )
+            total_usage["output_tokens"] += int(
+                getattr(usage, "completion_tokens", 0) or 0
+            )
+            choices = getattr(response, "choices", None) or []
+            content = (
+                getattr(getattr(choices[0], "message", None), "content", None)
+                if choices else None
+            )
+            if content not in (None, ""):
+                try:
+                    return _parse_cloud_decision(content), total_usage
+                except (TypeError, ValueError) as exc:
+                    if attempt == 0:
+                        continue
+                    raise _CloudModelInvalidResponseError(
+                        f"Cloud model returned an invalid decision: {exc}"
+                    ) from exc
+            if attempt == 1:
+                finish_reason = getattr(choices[0], "finish_reason", "missing choice") if choices else "missing choice"
+                raise _CloudModelInvalidResponseError(
+                    f"Cloud model returned empty output (finish_reason={finish_reason})"
+                )
+        raise RuntimeError("Azure chat response did not complete")
+
     def _predict_local(self, article: str, entity_name: str) -> tuple[dict[str, Any], dict[str, int]]:
         is_gpt_oss = self._active.id.startswith("gpt-oss-20b-")
+        is_ministral = self._active.id.startswith("ministral-3-")
         is_reasoning_model = (
             self._active.id.startswith("deepseek-r1-distill-")
             or "reasoning" in self._active.id
@@ -689,59 +903,70 @@ class GenerativeBenchmarkRuntime:
         template_options: dict[str, Any] = {"enable_thinking": False}
         if is_gpt_oss:
             template_options["reasoning_effort"] = "low"
-        payload = {
-            "model": self._active.id,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(
-                    {"entity_name": entity_name, "article": article}, ensure_ascii=False
-                )},
-            ],
-            "temperature": 0,
-            "max_tokens": 4096 if is_reasoning_model else 2048 if is_gpt_oss else 128,
-            "chat_template_kwargs": template_options,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "adverse_media_decision", "strict": True, "schema": DECISION_SCHEMA},
-            },
-        }
-        if self._active.id.startswith("ministral-3-") and is_reasoning_model:
-            payload["reasoning_format"] = "none"
-        request = urllib.request.Request(
-            f"{self._base_url}/v1/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=600) as response:
-                body = json.load(response)
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace").strip()
-            raise _LlamaServerHTTPError(
-                error.code,
-                detail or error.reason or "request rejected without a response body",
-            ) from error
-        usage = body.get("usage", {})
-        try:
-            choice = body["choices"][0]
-            content = choice["message"]["content"]
-            result = json.loads(content)
-        except (IndexError, KeyError, TypeError, json.JSONDecodeError) as error:
-            finish_reason = (
-                body.get("choices", [{}])[0].get("finish_reason", "unknown")
-                if body.get("choices")
-                else "missing choice"
+        base_budget = 4096 if is_reasoning_model else 2048 if is_gpt_oss else 512 if is_ministral else 128
+        budgets = (base_budget, min(8192, max(512, base_budget * 4)))
+        total_usage = {"input_tokens": 0, "output_tokens": 0}
+        for attempt, max_tokens in enumerate(budgets):
+            payload = {
+                "model": self._active.id,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(
+                        {"entity_name": entity_name, "article": article}, ensure_ascii=False
+                    )},
+                ],
+                "temperature": 0,
+                "max_tokens": max_tokens,
+                "chat_template_kwargs": template_options,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "adverse_media_decision", "strict": True, "schema": DECISION_SCHEMA},
+                },
+            }
+            if is_ministral:
+                payload["reasoning_format"] = "none"
+            request = urllib.request.Request(
+                f"{self._base_url}/v1/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
             )
-            content_preview = str(locals().get("content", ""))[:500]
-            raise _LlamaServerResponseError(
-                "llama-server returned malformed structured output "
-                f"(finish_reason={finish_reason}): {content_preview!r}",
-                finish_reason=finish_reason,
-            ) from error
-        return result, {
-            "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
-            "output_tokens": int(usage.get("completion_tokens", 0) or 0),
-        }
+            try:
+                with urllib.request.urlopen(request, timeout=self._request_timeout) as response:
+                    body = json.load(response)
+            except urllib.error.HTTPError as error:
+                detail = error.read().decode("utf-8", errors="replace").strip()
+                raise _LlamaServerHTTPError(
+                    error.code,
+                    detail or error.reason or "request rejected without a response body",
+                ) from error
+            except (TimeoutError, urllib.error.URLError) as error:
+                raise _LlamaServerTransportError(
+                    "llama-server did not return a benchmark response within "
+                    f"{self._request_timeout:g} seconds"
+                ) from error
+            usage = body.get("usage", {})
+            total_usage["input_tokens"] += int(usage.get("prompt_tokens", 0) or 0)
+            total_usage["output_tokens"] += int(usage.get("completion_tokens", 0) or 0)
+            try:
+                choice = body["choices"][0]
+                content = choice["message"]["content"]
+                result = json.loads(content)
+            except (IndexError, KeyError, TypeError, json.JSONDecodeError) as error:
+                finish_reason = (
+                    body.get("choices", [{}])[0].get("finish_reason", "unknown")
+                    if body.get("choices")
+                    else "missing choice"
+                )
+                if finish_reason == "length" and attempt < len(budgets) - 1:
+                    continue
+                content_preview = str(locals().get("content", ""))[:500]
+                raise _LlamaServerResponseError(
+                    "llama-server returned malformed structured output "
+                    f"(finish_reason={finish_reason}): {content_preview!r}",
+                    finish_reason=finish_reason,
+                ) from error
+            return result, total_usage
+        raise RuntimeError("llama-server exhausted structured-output retries")
 
     def _wait_until_ready(self) -> None:
         deadline = time.monotonic() + 180

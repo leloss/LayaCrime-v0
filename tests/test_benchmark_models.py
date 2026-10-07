@@ -1,7 +1,9 @@
 import io
 import json
+import sys
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,8 +11,10 @@ from laya_adverse_media.benchmark_models import (
     BENCHMARK_MODELS,
     DECISION_SCHEMA,
     GenerativeBenchmarkRuntime,
+    TemporaryCloudModelError,
     _LlamaServerHTTPError,
     _LlamaServerResponseError,
+    _LlamaServerTransportError,
     _matching_orphaned_server_pids,
     benchmark_model_options,
     model_installation_receipt_path,
@@ -74,6 +78,22 @@ def test_benchmark_model_catalog_has_unique_valid_entries(tmp_path: Path) -> Non
     assert all(not option["installed"] for option in options if option["provider"] == "llama.cpp")
     assert all(option["credential_required"] for option in options if option["provider"] == "azure")
     assert {
+        model.id: model.azure_deployment
+        for model in BENCHMARK_MODELS
+        if model.provider == "azure"
+    } == {
+        "gpt-5-6-luna": "gpt-5.6-luna",
+        "gpt-5-4-nano": "gpt-5.4-nano",
+        "grok-4-1-fast-reasoning": "grok-4-1-fast-reasoning",
+        "grok-4-1-fast-non-reasoning": "grok-4-1-fast-non-reasoning",
+        "gpt-6-luna": "gpt-6-luna",
+        "deepseek-v4-1-flash": "DeepSeek-V4.1-Flash",
+        "azure-custom-endpoint": None,
+    }
+    endpoint_action = next(model for model in options if model["id"] == "azure-custom-endpoint")
+    assert endpoint_action["action_only"] is True
+    assert endpoint_action["action_label"] == "Add endpoint…"
+    assert {
         model.id: model.source_repo_id
         for model in BENCHMARK_MODELS
         if model.provider == "llama.cpp"
@@ -87,6 +107,7 @@ def test_benchmark_model_catalog_has_unique_valid_entries(tmp_path: Path) -> Non
             "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
         ),
         "qwen3-8-27b-iq4-xs": "Qwen/Qwen3.8-27B",
+        "ternary-bonsai-27b-q2-g64": "Qwen/Qwen3.6-27B",
         "qwen3-6-35b-a3b-q3-k-m": "Qwen/Qwen3.6-35B-A3B",
         "qwen3-5-35b-a3b-q3-k-m": "Qwen/Qwen3.5-35B-A3B",
         "gpt-oss-20b-q5-k-m": "openai/gpt-oss-20b",
@@ -200,7 +221,7 @@ def test_runtime_can_activate_registered_custom_model(tmp_path: Path) -> None:
     assert commands[0][commands[0].index("--model") + 1].endswith("custom.gguf")
 
 
-def test_cuda_activation_targets_enumerated_device_and_all_layers(tmp_path: Path) -> None:
+def test_cuda_activation_uses_automatic_memory_fitting(tmp_path: Path) -> None:
     captured: list[str] = []
     model = next(model for model in BENCHMARK_MODELS if model.provider == "llama.cpp")
     install_test_model(tmp_path / str(model.filename))
@@ -234,7 +255,47 @@ def test_cuda_activation_targets_enumerated_device_and_all_layers(tmp_path: Path
     runtime.close()
 
     assert captured[captured.index("--device") + 1] == "CUDA0"
-    assert captured[captured.index("--n-gpu-layers") + 1] == "all"
+    assert "--n-gpu-layers" not in captured
+    assert captured[captured.index("--fit") + 1] == "on"
+    assert captured[captured.index("--fit-target") + 1] == "1024"
+
+
+def test_qwen38_keeps_full_context_with_automatic_memory_fitting(tmp_path: Path) -> None:
+    captured: list[str] = []
+    model = next(model for model in BENCHMARK_MODELS if model.id == "qwen3-8-27b-iq4-xs")
+    install_test_model(tmp_path / str(model.filename))
+    executable = tmp_path / "llama-server"
+    executable.write_bytes(b"runtime")
+
+    class Process:
+        pid = 123
+
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout: int) -> None:
+            pass
+
+        def poll(self):
+            return None
+
+    runtime = GenerativeBenchmarkRuntime(
+        tmp_path,
+        lambda: None,
+        llama_server=str(executable),
+        process_factory=lambda command, **kwargs: captured.extend(command) or Process(),
+        require_gpu=True,
+    )
+    runtime._resolve_cuda_device = lambda _: "CUDA0"
+    runtime._wait_until_ready = lambda: None
+    runtime._assert_gpu_offload = lambda: None
+
+    runtime.activate(model.id)
+    runtime.close()
+
+    assert captured[captured.index("--ctx-size") + 1] == "16384"
+    assert "--n-gpu-layers" not in captured
+    assert captured[captured.index("--fit-target") + 1] == "1024"
 
 
 @pytest.mark.parametrize(
@@ -330,6 +391,312 @@ def test_azure_max_output_retries_with_low_reasoning_and_aggregates_usage() -> N
     assert usage == {"input_tokens": 200, "output_tokens": 4128}
 
 
+def test_grok_azure_uses_chat_completions() -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    runtime._active = next(
+        model
+        for model in BENCHMARK_MODELS
+        if model.id == "grok-4-1-fast-non-reasoning"
+    )
+    runtime._deployment = str(runtime._active.azure_deployment)
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="1"),
+                    finish_reason="stop",
+                )],
+                usage=None,
+            )
+
+    runtime._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=Completions()),
+        responses=SimpleNamespace(create=lambda **kwargs: pytest.fail("Responses API used")),
+    )
+
+    result, _ = runtime._predict_azure("Article", "Entity")
+
+    assert result == {"label": 1}
+    assert calls[0]["model"] == "grok-4-1-fast-non-reasoning"
+    assert calls[0]["messages"][0]["role"] == "system"
+    assert calls[0]["messages"][1] == {
+        "role": "user",
+        "content": '{"entity_name": "Entity", "article": "Article"}',
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_id", "input_price", "output_price"),
+    [
+        ("grok-4-1-fast-reasoning", 0.20, 0.50),
+        ("grok-4-1-fast-non-reasoning", 0.20, 0.50),
+        ("gpt-6-luna", 0.10, 0.50),
+        ("deepseek-v4-1-flash", 0.30, 1.20),
+    ],
+)
+def test_new_azure_model_prices(
+    model_id: str, input_price: float, output_price: float
+) -> None:
+    model = next(model for model in BENCHMARK_MODELS if model.id == model_id)
+
+    assert model.input_usd_per_million == input_price
+    assert model.output_usd_per_million == output_price
+
+
+def test_deepseek_azure_retries_empty_chat_content_and_accepts_plain_label() -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    runtime._active = next(
+        model for model in BENCHMARK_MODELS if model.id == "deepseek-v4-1-flash"
+    )
+    runtime._deployment = str(runtime._active.azure_deployment)
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="" if len(calls) == 1 else "2"),
+                    finish_reason="length" if len(calls) == 1 else "stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=4),
+            )
+
+    runtime._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=Completions()),
+        responses=SimpleNamespace(create=lambda **kwargs: pytest.fail("Responses API used")),
+    )
+
+    result, usage = runtime._predict_azure("Article", "Entity")
+
+    assert result == {"label": 2}
+    assert [call["max_tokens"] for call in calls] == [512, 2048]
+    assert calls[0]["messages"][1]["content"] == (
+        '{"entity_name": "Entity", "article": "Article"}'
+    )
+    assert usage == {"input_tokens": 20, "output_tokens": 8}
+
+
+def test_deepseek_azure_retries_empty_http_response_body() -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    runtime._active = next(
+        model for model in BENCHMARK_MODELS if model.id == "deepseek-v4-1-flash"
+    )
+    runtime._deployment = str(runtime._active.azure_deployment)
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise json.JSONDecodeError("Expecting value", "", 0)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="1"),
+                    finish_reason="stop",
+                )],
+                usage=None,
+            )
+
+    runtime._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=Completions())
+    )
+
+    result, _ = runtime._predict_azure("Article", "Entity")
+
+    assert result == {"label": 1}
+    assert [call["max_tokens"] for call in calls] == [512, 2048]
+
+
+@pytest.mark.parametrize(
+    ("model_id", "content"),
+    [
+        ("grok-4-1-fast-non-reasoning", "Label: 2"),
+        ("deepseek-v4-1-flash", '{"label":"2"}'),
+    ],
+)
+def test_cloud_chat_accepts_unambiguous_label_variants(
+    model_id: str, content: str
+) -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    runtime._active = next(model for model in BENCHMARK_MODELS if model.id == model_id)
+    runtime._deployment = str(runtime._active.azure_deployment)
+
+    class Completions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content=content),
+                    finish_reason="stop",
+                )],
+                usage=None,
+            )
+
+    runtime._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=Completions())
+    )
+
+    result, _ = runtime._predict_azure("Article", "Entity")
+
+    assert result == {"label": 2}
+
+
+def test_cloud_chat_retries_malformed_nonempty_content() -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    runtime._active = next(
+        model for model in BENCHMARK_MODELS
+        if model.id == "grok-4-1-fast-non-reasoning"
+    )
+    runtime._deployment = str(runtime._active.azure_deployment)
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="No decision" if len(calls) == 1 else "2"
+                    ),
+                    finish_reason="stop",
+                )],
+                usage=None,
+            )
+
+    runtime._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=Completions())
+    )
+
+    result, _ = runtime._predict_azure("Article", "Entity")
+
+    assert result == {"label": 2}
+    assert [call["max_tokens"] for call in calls] == [512, 2048]
+
+
+def test_deepseek_exhausted_empty_content_retries_shorter_article() -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    runtime._active = next(
+        model for model in BENCHMARK_MODELS if model.id == "deepseek-v4-1-flash"
+    )
+    runtime._deployment = str(runtime._active.azure_deployment)
+    submitted_lengths = []
+
+    class Completions:
+        def create(self, **kwargs):
+            submitted = json.loads(kwargs["messages"][1]["content"])["article"]
+            submitted_lengths.append(len(submitted))
+            content = "" if len(submitted) > 1_359 else '{"label":1}'
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content=content),
+                    finish_reason="stop",
+                )],
+                usage=None,
+            )
+
+    runtime._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=Completions())
+    )
+
+    result = runtime.predict("x" * 2_718, "Entity")
+
+    assert submitted_lengths == [2_718, 2_718, 2_038, 2_038, 1_359]
+    assert result["answers"]["criminal_association"]["choice"] == "B"
+    assert result["routing"]["input"]["submitted_article_chars"] == 1_359
+
+
+def test_azure_rate_limit_becomes_resumable_temporary_failure() -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    runtime._active = next(
+        model for model in BENCHMARK_MODELS if model.id == "grok-4-1-fast-reasoning"
+    )
+    runtime._deployment = str(runtime._active.azure_deployment)
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class Completions:
+        def create(self, **kwargs):
+            raise RateLimitError("no_capacity")
+
+    runtime._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=Completions())
+    )
+
+    with pytest.raises(TemporaryCloudModelError, match="resume the benchmark"):
+        runtime._predict_azure("Article", "Entity")
+
+
+def test_azure_bad_request_retries_with_distinct_shorter_article() -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    runtime._active = next(
+        model for model in BENCHMARK_MODELS if model.id == "grok-4-1-fast-reasoning"
+    )
+    submitted_lengths = []
+
+    class BadRequestError(Exception):
+        status_code = 400
+
+    def predict(article, entity_name):
+        submitted_lengths.append(len(article))
+        if len(article) > 1_359:
+            raise BadRequestError("invalid request")
+        return {"label": 1}, {"input_tokens": 10, "output_tokens": 2}
+
+    runtime._predict_azure = predict
+
+    result = runtime.predict("x" * 2_718, "Ravinder Singh")
+
+    assert submitted_lengths == [2_718, 2_038, 1_359]
+    assert result["routing"]["input"] == {
+        "original_article_chars": 2_718,
+        "submitted_article_chars": 1_359,
+        "article_truncated": True,
+    }
+
+
+def test_custom_azure_endpoint_uses_entered_model_endpoint_and_key(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client_args = {}
+    calls = []
+
+    class Responses:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                status="completed", output_text='{"label":1}', usage=None
+            )
+
+    client = SimpleNamespace(responses=Responses(), close=lambda: None)
+
+    def openai_client(**kwargs):
+        client_args.update(kwargs)
+        return client
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=openai_client))
+    runtime = GenerativeBenchmarkRuntime(tmp_path, lambda: None)
+
+    runtime.activate(
+        "azure-custom-endpoint",
+        {
+            "deployment": "review-model-v2",
+            "endpoint": "https://review.openai.azure.com/openai/v1/",
+            "api_key": "transient-key",
+        },
+    )
+    result, _ = runtime._predict_azure("Article", "Entity")
+
+    assert runtime.active_model == "azure-custom-endpoint"
+    assert client_args["base_url"] == "https://review.openai.azure.com/openai/v1/"
+    assert client_args["api_key"] == "transient-key"
+    assert calls[0]["model"] == "review-model-v2"
+    assert result == {"label": 1}
+
+
 def test_local_bad_request_retries_with_smaller_article() -> None:
     runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
     runtime._active = next(
@@ -400,6 +767,34 @@ def test_output_limit_response_is_not_retried_with_smaller_article() -> None:
     assert submitted_lengths == [50_000]
 
 
+def test_transport_timeout_restarts_server_and_retries_shorter_article() -> None:
+    runtime = GenerativeBenchmarkRuntime(Path("models"), lambda: None)
+    spec = next(model for model in BENCHMARK_MODELS if model.provider == "llama.cpp")
+    runtime._active = spec
+    submitted_lengths = []
+    activations = []
+
+    def predict(article: str, entity: str):
+        submitted_lengths.append(len(article))
+        if len(submitted_lengths) == 1:
+            raise _LlamaServerTransportError("request timed out")
+        return {"label": 1}, {}
+
+    def activate(model_id, credentials=None, selected_spec=None, **kwargs):
+        activations.append(model_id)
+        runtime._active = kwargs.get("spec") or selected_spec
+        return model_id
+
+    runtime._predict_local = predict
+    runtime.activate = activate
+
+    result = runtime.predict("x" * 60_000, "Entity")
+
+    assert submitted_lengths == [50_000, 32_000]
+    assert activations == [spec.id]
+    assert result["answers"]["criminal_association"]["choice"] == "B"
+
+
 def test_local_http_error_preserves_server_detail(tmp_path: Path, monkeypatch) -> None:
     runtime = GenerativeBenchmarkRuntime(tmp_path, lambda: None)
     runtime._active = next(
@@ -432,19 +827,81 @@ def test_local_unterminated_json_becomes_retryable_error(
         model for model in BENCHMARK_MODELS if model.provider == "llama.cpp"
     )
     runtime._base_url = "http://127.0.0.1:8000"
-    response = io.BytesIO(
-        b'{"choices":[{"finish_reason":"length","message":{"content":"{\\"label\\":\\""}}],'
-        b'"usage":{}}'
-    )
+    budgets = []
+
+    def truncated(request, timeout):
+        budgets.append(json.loads(request.data)["max_tokens"])
+        return io.BytesIO(
+            b'{"choices":[{"finish_reason":"length","message":{"content":"{\\"label\\":\\""}}],'
+            b'"usage":{}}'
+        )
+
     monkeypatch.setattr(
         "laya_adverse_media.benchmark_models.urllib.request.urlopen",
-        lambda *args, **kwargs: response,
+        truncated,
     )
 
     with pytest.raises(
         _LlamaServerResponseError, match="finish_reason=length"
     ):
         runtime._predict_local("Article", "Entity")
+
+    assert budgets == [128, 512]
+
+
+def test_ministral_instruct_disables_reasoning_and_uses_larger_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = GenerativeBenchmarkRuntime(tmp_path, lambda: None)
+    runtime._active = next(
+        model
+        for model in BENCHMARK_MODELS
+        if model.id == "ministral-3-14b-instruct-q8-0"
+    )
+    runtime._base_url = "http://127.0.0.1:8000"
+    captured = {}
+
+    def respond(request, timeout):
+        captured.update(json.loads(request.data))
+        return io.BytesIO(
+            b'{"choices":[{"finish_reason":"stop","message":{"content":"{\\"label\\":2}"}}],'
+            b'"usage":{}}'
+        )
+
+    monkeypatch.setattr(
+        "laya_adverse_media.benchmark_models.urllib.request.urlopen", respond
+    )
+
+    result, _ = runtime._predict_local("Article", "Entity")
+
+    assert result == {"label": 2}
+    assert captured["max_tokens"] == 512
+    assert captured["reasoning_format"] == "none"
+    assert captured["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_local_request_times_out_before_benchmark_appears_stuck(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = GenerativeBenchmarkRuntime(tmp_path, lambda: None)
+    runtime._active = next(
+        model for model in BENCHMARK_MODELS if model.provider == "llama.cpp"
+    )
+    runtime._base_url = "http://127.0.0.1:8000"
+    captured = {}
+
+    def timeout(request, timeout):
+        captured["timeout"] = timeout
+        raise TimeoutError("model stalled")
+
+    monkeypatch.setattr(
+        "laya_adverse_media.benchmark_models.urllib.request.urlopen", timeout
+    )
+
+    with pytest.raises(RuntimeError, match="within 90 seconds"):
+        runtime._predict_local("Article", "Entity")
+
+    assert captured["timeout"] == 90
 
 
 @pytest.mark.parametrize("model_id", ["gpt-oss-20b-mxfp4", "gpt-oss-20b-q5-k-m"])

@@ -23,9 +23,11 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
 
+from .academic_models import AcademicModelRuntime
 from .benchmark import BenchmarkState, load_benchmark, load_gold_labels, read_jsonl
 from .benchmark_models import (
     GenerativeBenchmarkRuntime,
+    TemporaryCloudModelError,
     benchmark_model_options,
     model_installation_receipt_path,
     register_custom_model,
@@ -530,10 +532,12 @@ class _SelectablePredictor:
         router: Predictor,
         fine_tuned_models: Mapping[str, Path],
         agent_factory: Callable[[str], Any],
+        academic_runtime: AcademicModelRuntime | None = None,
     ) -> None:
         self._router = router
         self._agent_factory = agent_factory
         self._agents: dict[str, Any] = {}
+        self._academic_runtime = academic_runtime
         self._lock = threading.RLock()
         self._active_model = "auto"
         self.models = dict(getattr(router, "models", {}))
@@ -542,7 +546,13 @@ class _SelectablePredictor:
     @property
     def loaded(self) -> list[str]:
         with self._lock:
-            return [*self._router.loaded, *self._agents]
+            academic = (
+                [self._academic_runtime.active_model]
+                if self._academic_runtime is not None
+                and self._academic_runtime.active_model is not None
+                else []
+            )
+            return [*self._router.loaded, *self._agents, *academic]
 
     @property
     def active_model(self) -> str:
@@ -571,7 +581,19 @@ class _SelectablePredictor:
         with self._lock:
             if selected == self._active_model:
                 return selected
-            if selected.startswith("crime-"):
+            academic_ids = {
+                option["id"] for option in self._academic_runtime.options()
+            } if self._academic_runtime is not None else set()
+            if selected in academic_ids:
+                self._router.unload()
+                self._release_fine_tuned()
+                self._active_model = "loading"
+                try:
+                    self._academic_runtime.activate(selected)
+                except Exception:
+                    self._active_model = "unavailable"
+                    raise
+            elif selected.startswith("crime-"):
                 model_path = self.models.get(selected)
                 if model_path is None:
                     raise ValueError(f"unknown fine-tuned model {selected!r}")
@@ -602,6 +624,14 @@ class _SelectablePredictor:
         model: str | None = None,
     ) -> Mapping[str, Any]:
         with self._lock:
+            academic_ids = {
+                option["id"] for option in self._academic_runtime.options()
+            } if self._academic_runtime is not None else set()
+            if model in academic_ids:
+                self.activate(model)
+                return self._academic_runtime.predict(
+                    str(state["article"]), str(state["entity_name"]), model
+                )
             if model is None or not model.startswith("crime-"):
                 self.activate(None)
                 return self._router.predict(state, questions, model=model)
@@ -632,6 +662,32 @@ def _fine_tuned_model_paths(models_root: Path) -> dict[str, Path]:
     }
 
 
+SELECTED_WINNER_ID = "crime-layacrime-v0"
+SELECTED_WINNER_HF_REPO_ID = "leloss/LayaCrime-v0"
+SELECTED_WINNER_HF_REVISION = "main"
+SELECTED_WINNER_DIRECTORY = "layacrime-v0"
+
+
+def _selected_winner_model_path(project_root: Path) -> Path:
+    return Path(
+        os.getenv(
+            "LAYA_SELECTED_MODEL_DIR",
+            project_root
+            / "artifacts"
+            / "public-experiment-matrix"
+            / "models"
+            / "holdout_80_20__maximum_task_adaptation__seed-20260923",
+        )
+    ).expanduser().resolve()
+
+
+def _model_paths(models_root: Path, selected_winner: Path) -> dict[str, Path]:
+    models = _fine_tuned_model_paths(models_root)
+    if all((selected_winner / required).is_file() for required in REQUIRED_MODEL_FILES):
+        models[SELECTED_WINNER_ID] = selected_winner
+    return models
+
+
 def _checkpoint_modified_at(path: Path) -> int:
     candidates = [path / "training_report.json", path / "model.safetensors"]
     try:
@@ -643,11 +699,18 @@ def _checkpoint_modified_at(path: Path) -> int:
         return 0
 
 
-def _refresh_fine_tuned_models(predictor: Predictor, models_root: Path) -> None:
+def _refresh_fine_tuned_models(
+    predictor: Predictor, models_root: Path, selected_winner: Path | None = None
+) -> None:
     configured = getattr(predictor, "models", None)
     if not isinstance(configured, dict):
         return
     discovered = _fine_tuned_model_paths(models_root)
+    winner = selected_winner or configured.get(SELECTED_WINNER_ID)
+    if winner is not None:
+        winner_path = Path(str(winner))
+        if all((winner_path / required).is_file() for required in REQUIRED_MODEL_FILES):
+            discovered[SELECTED_WINNER_ID] = winner_path
     def refresh() -> None:
         for name in list(configured):
             if name.startswith("crime-") and name not in discovered:
@@ -698,7 +761,9 @@ def _build_predictor() -> Predictor:
             project_root / "models" / "fine-tuned",
         )
     ).expanduser().resolve()
-    fine_tuned_models = _fine_tuned_model_paths(fine_tuned_root)
+    fine_tuned_models = _model_paths(
+        fine_tuned_root, _selected_winner_model_path(project_root)
+    )
     missing = [
         f"{name}: {path / required}"
         for name, path in model_paths.items()
@@ -720,6 +785,7 @@ def _build_predictor() -> Predictor:
         router,
         fine_tuned_models,
         lambda path: Agent(path, device=device),
+        AcademicModelRuntime(project_root),
     )
 
 
@@ -749,29 +815,73 @@ def _model_options(predictor: Predictor) -> list[dict[str, Any]]:
             name.casefold(),
         ),
     )
-    return [
+    decision_models = [
         {
             "id": name,
-            "label": f"LayaCrime · {name.removeprefix('crime-').replace('-', ' ').title()}",
+            "label": (
+                "LayaCrime.v0 · Full-rate winner"
+                if name == SELECTED_WINNER_ID
+                else f"LayaCrime · {name.removeprefix('crime-').replace('-', ' ').title()}"
+            ),
             "family": "fine-tuned",
             "category": "decision",
-            "deletable": True,
+            "deletable": name != SELECTED_WINNER_ID,
+            "provider": "huggingface" if name == SELECTED_WINNER_ID else "local",
+            "installed": True,
+            "runtime_available": True,
+            "installable": name == SELECTED_WINNER_ID,
+            "repo_id": (
+                SELECTED_WINNER_HF_REPO_ID
+                if name == SELECTED_WINNER_ID else None
+            ),
+            "revision": (
+                SELECTED_WINNER_HF_REVISION
+                if name == SELECTED_WINNER_ID else None
+            ),
+            "installation_state": "installed",
             "prompt": _model_prompt(predictor, name),
         }
         for name in fine_tuned
-    ] + [{
+    ]
+    if SELECTED_WINNER_ID not in configured:
+        decision_models.insert(0, {
+            "id": SELECTED_WINNER_ID,
+            "label": "LayaCrime.v0 · Full-rate winner",
+            "family": "fine-tuned",
+            "category": "decision",
+            "deletable": False,
+            "provider": "huggingface",
+            "installed": False,
+            "runtime_available": False,
+            "installable": True,
+            "repo_id": SELECTED_WINNER_HF_REPO_ID,
+            "revision": SELECTED_WINNER_HF_REVISION,
+            "installation_state": "missing",
+            "availability_error": "LayaCrime.v0 checkpoint is not installed",
+            "prompt": validate_prompt(None),
+        })
+    decision_models.append({
         "id": "auto",
         "label": "Laya · Router",
         "family": "original",
         "category": "decision",
         "deletable": False,
         "prompt": _model_prompt(predictor, None),
-    }]
+    })
+    academic_runtime = getattr(predictor, "_academic_runtime", None)
+    if academic_runtime is not None:
+        decision_models.extend(academic_runtime.options())
+    return decision_models
 
 
 def _available_model_ids(predictor: Predictor) -> set[str]:
     configured = getattr(predictor, "models", {})
-    return {"english", "multilingual", *configured}
+    return {
+        "english",
+        "multilingual",
+        *configured,
+        *(option["id"] for option in _model_options(predictor)),
+    }
 
 
 def _questions(
@@ -1050,6 +1160,7 @@ def create_app(
             "LAYA_FINE_TUNED_MODELS_DIR", project_root / "models" / "fine-tuned"
         )
     ).expanduser().resolve()
+    selected_winner_model = _selected_winner_model_path(project_root)
     model_bundle = project_root / "models" / "models--convaiinnovations--laya"
     model_revision = (
         (model_bundle / "refs" / "main").read_text(encoding="utf-8").strip()
@@ -1327,6 +1438,10 @@ def create_app(
             app.state.model_installation.stop()
             if app.state.generative_runtime is not None:
                 app.state.generative_runtime.close()
+            if app.state.predictor is not None:
+                academic_runtime = getattr(app.state.predictor, "_academic_runtime", None)
+                if academic_runtime is not None:
+                    academic_runtime.close()
             app.state.inference_pool.shutdown(wait=True)
 
     def resolve_predictor(request: Request, wait: float = 0) -> Predictor | None:
@@ -1522,7 +1637,9 @@ def create_app(
         predictor = resolve_predictor(request, wait=0.05)
         laya_models: list[dict[str, Any]] = []
         if predictor is not None:
-            _refresh_fine_tuned_models(predictor, fine_tuned_models_root)
+            _refresh_fine_tuned_models(
+                predictor, fine_tuned_models_root, selected_winner_model
+            )
             laya_models = _model_options(predictor)
         gguf_root = gguf_models_root()
         generative_models = benchmark_model_options(gguf_root)
@@ -1571,7 +1688,15 @@ def create_app(
     async def benchmark_activate_model(
         payload: BenchmarkModelActivationRequest, request: Request
     ) -> dict[str, Any]:
-        if request.app.state.benchmark.snapshot()["status"] in {"running", "paused"}:
+        benchmark_status = request.app.state.benchmark.snapshot()["status"]
+        interrupted = benchmark_status in {"paused", "error"}
+        reactivating_interrupted_route = (
+            interrupted
+            and payload.model_id == request.app.state.benchmark_routing_mode
+        )
+        if benchmark_status == "running" or (
+            interrupted and not reactivating_interrupted_route
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="reset or finish the active benchmark before changing models",
@@ -1674,6 +1799,53 @@ def create_app(
         payload: BenchmarkModelInstallRequest, request: Request
     ) -> dict[str, Any]:
         require_fine_tuning()
+        token = (
+            payload.huggingface_token.get_secret_value()
+            if payload.huggingface_token else None
+        )
+        environment = os.environ.copy()
+        environment.pop("HF_HUB_OFFLINE", None)
+        if payload.model_id == SELECTED_WINNER_ID:
+            target = fine_tuned_models_root / SELECTED_WINNER_DIRECTORY
+            target.mkdir(parents=True, exist_ok=True)
+            command = [
+                sys.executable,
+                str(project_root / "scripts" / "download_huggingface_snapshot.py"),
+                "--repo-id",
+                SELECTED_WINNER_HF_REPO_ID,
+                "--revision",
+                SELECTED_WINNER_HF_REVISION,
+                "--local-dir",
+                str(target),
+                "--read-token-stdin",
+            ]
+            for pattern in (
+                "encoder/**",
+                "model.safetensors",
+                "rl_agent_config.json",
+                "tokenizer/**",
+                "training_report.json",
+                "data_manifest.json",
+                "README.md",
+            ):
+                command.extend(["--allow-pattern", pattern])
+            for required in REQUIRED_MODEL_FILES:
+                command.extend(["--required-file", required])
+            try:
+                request.app.state.model_installation.start(
+                    command,
+                    SELECTED_WINNER_ID,
+                    target,
+                    project_root,
+                    stdin_data=json.dumps({"token": token}),
+                    env=environment,
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except OSError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return request.app.state.model_installation.snapshot()
+
         gguf_root = gguf_models_root()
         spec = registered_model_by_id(gguf_root, payload.model_id)
         if spec is None or spec.provider != "llama.cpp" or not spec.repo_id or not spec.filename:
@@ -1687,15 +1859,8 @@ def create_app(
             )
         except (OSError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        token = (
-            payload.huggingface_token.get_secret_value()
-            if payload.huggingface_token else None
-        )
-
         gguf_root.mkdir(parents=True, exist_ok=True)
         model_installation_receipt_path(gguf_root / spec.filename).unlink(missing_ok=True)
-        environment = os.environ.copy()
-        environment.pop("HF_HUB_OFFLINE", None)
         try:
             request.app.state.model_installation.start(
                 [
@@ -1753,7 +1918,9 @@ def create_app(
             )
         loop = asyncio.get_running_loop()
         try:
-            _refresh_fine_tuned_models(predictor, fine_tuned_models_root)
+            _refresh_fine_tuned_models(
+                predictor, fine_tuned_models_root, selected_winner_model
+            )
             selected_model = (None if payload.model_id == "auto" else payload.model_id) or (
                 None if payload.routing_mode == "auto" else payload.routing_mode
             )
@@ -1931,6 +2098,9 @@ def create_app(
             state.paused()
             persist_active_benchmark(state, request.app.state)
             raise
+        except TemporaryCloudModelError as exc:
+            state.paused(exc)
+            persist_active_benchmark(state, request.app.state)
         except Exception as exc:
             state.fail(exc)
             persist_active_benchmark(state, request.app.state)
@@ -2479,6 +2649,17 @@ def create_app(
         rows = read_jsonl(output_path)[: snapshot["completed"]]
         if len(rows) != snapshot["completed"]:
             raise HTTPException(status_code=409, detail="prediction ledger is incomplete")
+        routing_mode = request.app.state.benchmark_routing_mode
+        if routing_mode != "auto":
+            ledger_models = {
+                (row.get("routing") or {}).get("model")
+                for row in rows
+            }
+            if ledger_models != {routing_mode}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="prediction ledger does not match the selected model",
+                )
         created_at = datetime.now(timezone.utc)
         runs_dir.mkdir(parents=True, exist_ok=True)
         base_run_id = _run_id(name, created_at)
@@ -2500,7 +2681,7 @@ def create_app(
             "status": snapshot["status"],
             "completed": snapshot["completed"],
             "total": snapshot["total"],
-            "routing_mode": request.app.state.benchmark_routing_mode,
+            "routing_mode": routing_mode,
             "dataset_id": active_dataset.id if active_dataset else None,
             "label_set_id": request.app.state.benchmark_label_set_id,
             "corpus_sha256": _file_sha256(corpus_path),

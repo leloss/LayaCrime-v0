@@ -68,13 +68,13 @@ function updateIdleArticleCopy() {
 function updateModelInstallAction() {
   const model = selectedModel();
   if (!model) { $("#install-model").hidden = true; return; }
-  $("#install-model").hidden = model.provider !== "llama.cpp" || (model.installed && model.runtime_available);
-  $("#install-model").textContent = model.installed ? "Install llama.cpp" : model.installation_state === "missing" ? "Install requirements" : "Repair installation";
+  $("#install-model").hidden = !model.installable || (model.installed && model.runtime_available);
+  $("#install-model").textContent = model.installation_state === "missing" ? "Install model" : "Repair installation";
 }
 function requestCredentials(model) {
   const dialog = $("#credentials-dialog"), form = $("#credentials-form");
-  $("#credentials-title").textContent = `Connect ${model.label}`;
-  $("#azure-deployment").value = model.label.toLowerCase();
+  $("#credentials-title").textContent = model.action_only ? "Add endpoint" : `Connect ${model.label}`;
+  $("#azure-deployment").value = model.action_only ? "" : (model.azure_deployment || model.label.toLowerCase());
   $("#azure-api-key").value = "";
   dialog.showModal();
   $("#azure-endpoint").focus();
@@ -95,6 +95,9 @@ function requestInstallation(model, custom = false) {
   $("#install-name").required = custom;
   $("#install-name").value = custom ? "" : model.label;
   $("#install-repo-id").value = custom ? "" : (model.repo_id || "");
+  $("#install-repo-id").readOnly = !custom && model.provider !== "llama.cpp";
+  $("#install-path-field").hidden = !custom && model.provider !== "llama.cpp";
+  $("#install-hf-path").required = custom || model.provider === "llama.cpp";
   $("#install-hf-path").value = custom ? "" : (model.huggingface_path || model.filename || "");
   $("#install-token").value = "";
   $("#install-close").onclick = null;
@@ -143,7 +146,7 @@ function finishInstallationVerification(error = null) {
   $("#install-percent").textContent = error ? "Failed" : "Ready";
   $("#install-progress-bar").className = "";
   $("#install-progress-bar").style.width = error ? "0%" : "100%";
-  $("#install-bytes").textContent = error ? "Model could not be activated" : "Runtime, GGUF, and GPU offload are ready";
+  $("#install-bytes").textContent = error ? "Model could not be activated" : "Model files and runtime are ready";
   $("#install-stop").hidden = true;
   if (!error) {
     if ($("#install-dialog").open) $("#install-dialog").close();
@@ -162,7 +165,7 @@ async function runInstallation(model, settings) {
 }
 async function installSelectedModel() {
   const model = selectedModel();
-  if (!model || model.provider !== "llama.cpp") return false;
+  if (!model || !model.installable) return false;
   const settings = await requestInstallation(model);
   return settings ? runInstallation(model, settings) : false;
 }
@@ -320,7 +323,8 @@ function drawConfidence() {
   context.fillStyle = "#68716d"; context.fillText("Sample 1", left, height - 7); context.textAlign = "right"; context.fillText(`Sample ${total.toLocaleString()}`, width - right, height - 7); context.textAlign = "left";
 }
 function render(report) {
-  audit(report.audit); const running = report.status === "running", paused = report.status === "paused";
+  audit(report.audit); const running = report.status === "running";
+  const interrupted = ["paused", "error"].includes(report.status) && report.completed < report.total;
   if (!promptInitialized && report.question && Array.isArray(report.criteria)) {
     questionTemplate = report.question;
     promptCriteria = report.criteria;
@@ -330,11 +334,12 @@ function render(report) {
   const startingRun = running && benchmarkStatus !== "running" && benchmarkStatus !== "paused";
   if (startingRun || !probabilityTotal) probabilityTotal = report.total || report.audit.blind_articles || 0;
   benchmarkStatus = report.status;
-  start.textContent = paused ? "Resume run" : running ? "Running" : report.status === "complete" ? "Run again" : "Start run"; start.disabled = running || modelLoading || !modelReady; pause.disabled = !running;
+  const interruptedModelNeedsActivation = interrupted && report.model_id && report.model_id !== activeModelId;
+  start.textContent = interrupted ? "Resume run" : running ? "Running" : report.status === "complete" ? "Run again" : "Start run"; start.disabled = running || modelLoading || !modelReady || interruptedModelNeedsActivation; pause.disabled = !running;
   loadRun.disabled = running || !savedRun.value;
-  $("#routing-mode").disabled = running || paused || modelLoading; $("#sample-limit").disabled = running || paused;
-  $("#edit-prompt").disabled = running || paused;
-  labelSet.disabled = running || paused; labelFile.disabled = running || paused; uploadLabels.disabled = running || paused || !labelFile.files.length;
+  $("#routing-mode").disabled = running || (interrupted && !interruptedModelNeedsActivation) || modelLoading; $("#sample-limit").disabled = running || interrupted;
+  $("#edit-prompt").disabled = running || interrupted;
+  labelSet.disabled = running || interrupted; labelFile.disabled = running || interrupted; uploadLabels.disabled = running || interrupted || !labelFile.files.length;
   $("#progress-count").textContent = `${report.completed.toLocaleString()} / ${report.total.toLocaleString()}`; $("#progress-percent").textContent = pct(report.progress); $("#overall-progress").style.width = pct(report.progress);
   const primary = report.metrics.gold;
   $("#accuracy").textContent = pct(primary.accuracy); $("#precision").textContent = pct(primary.precision_negative); $("#recall").textContent = pct(primary.recall_negative); $("#f1").textContent = pct(primary.f1_negative); $("#average-time").textContent = `${report.timing.average_seconds.toFixed(2)}s`;
@@ -389,8 +394,31 @@ $("#prompt-close").onclick = () => promptDialog.close();
 $("#cancel-prompt").onclick = () => promptDialog.close();
 $("#save-prompt").onclick = savePrompt;
 async function health() { try { const data = await (await fetch("/health")).json(), ready = data.status === "ok"; $("#model-health").className = `model-health ${ready ? "ready" : data.status === "warming" ? "" : "degraded"}`; $("#model-status-label").textContent = ready ? "Model ready" : data.status === "warming" ? "Loading catalog" : "Laya unavailable"; await loadModels(); if (data.status === "warming") setTimeout(health, 1500); if (data.error && !availableModels.length) fail(data.error); } catch (error) { fail(error.message); } }
-async function loadModels(selectedId = null) { const response = await fetch("/v1/benchmark/models"); if (!response.ok) return; const data = await response.json(); const select = $("#routing-mode"), selected = selectedId || data.active_model || select.value; availableModels = data.models; activeModelId = data.active_model || "auto"; const groups = [["Decision Models", "decision"], ["Language Models", "language"]].map(([label, category]) => { const group = document.createElement("optgroup"); group.label = label; const models = data.models.filter(model => model.category === category); models.forEach(model => group.append(new Option(`${model.label}${model.provider === "llama.cpp" && !model.installed ? model.installation_state === "missing" ? " · install required" : " · repair required" : ""}`, model.id))); if (!models.length) { const unavailable = new Option(`${label} unavailable`, `__${category}-unavailable`); unavailable.disabled = true; group.append(unavailable); } return group; }); const actions = document.createElement("optgroup"); actions.label = "Actions"; actions.append(new Option("Add custom model…", customModelAction)); const values = data.models.map(model => model.id); const content = [...groups, actions]; if (!values.includes(selected)) { const placeholder = new Option("Select a model", "", true, true); placeholder.disabled = true; content.unshift(placeholder); } select.replaceChildren(...content); if ([...select.options].some(option => option.value === selected)) select.value = selected; applySelectedModelPrompt(); updateModelInstallAction(); modelReady = availableModels.some(model => model.id === activeModelId); start.disabled = !modelReady; }
-async function activateSelectedModel() { if ($("#routing-mode").value === customModelAction) { try { if (await addCustomModel()) return activateSelectedModel(); await loadModels(activeModelId); } catch (error) { await loadModels(activeModelId); fail(error.message); } return; } applySelectedModelPrompt(); updateModelInstallAction(); const model = selectedModel(); if (!model) return; modelLoading = true; modelReady = false; $("#routing-mode").disabled = true; start.disabled = true; $("#model-health").className = "model-health"; $("#model-status-label").textContent = "Loading model"; fail(); try { if (model.provider === "llama.cpp" && (!model.installed || !model.runtime_available) && !(await installSelectedModel())) { $("#routing-mode").value = activeModelId; updateModelInstallAction(); modelReady = true; return; } const credentials = model.credential_required ? await requestCredentials(model) : {}; if (model.credential_required && !credentials) { $("#routing-mode").value = activeModelId; updateModelInstallAction(); modelReady = true; return; } await request("/v1/benchmark/models/activate", {model_id:model.id, ...credentials}); activeModelId = model.id; modelReady = true; finishInstallationVerification(); $("#model-health").className = "model-health ready"; $("#model-status-label").textContent = "Model ready"; } catch (error) { finishInstallationVerification(error); $("#routing-mode").value = activeModelId; updateModelInstallAction(); $("#model-health").className = "model-health degraded"; $("#model-status-label").textContent = "Model unavailable"; fail(error.message); } finally { modelLoading = false; $("#routing-mode").disabled = benchmarkStatus === "running" || benchmarkStatus === "paused"; start.disabled = benchmarkStatus === "running" || !modelReady; } }
+async function loadModels(selectedId = null) {
+  const response = await fetch("/v1/benchmark/models"); if (!response.ok) return;
+  const data = await response.json();
+  const select = $("#routing-mode"), selected = selectedId || data.active_model || select.value;
+  availableModels = data.models; activeModelId = data.active_model || "auto";
+  const endpointAction = data.models.find(model => model.provider === "azure" && model.action_only);
+  const groupSpecs = [
+    ["Decision Models", model => model.category === "decision", null],
+    ["Cloud LLMs", model => model.provider === "azure" && !model.action_only, endpointAction ? new Option(endpointAction.action_label, endpointAction.id) : null],
+    ["Self-hosted LLMs", model => model.provider === "llama.cpp", new Option("Add custom model…", customModelAction)],
+  ];
+  const groups = groupSpecs.map(([label, includes, action]) => {
+    const group = document.createElement("optgroup"); group.label = label;
+    const models = data.models.filter(includes);
+    models.forEach(model => group.append(new Option(`${model.label}${model.installable && !model.installed ? model.installation_state === "missing" ? " · install required" : " · repair required" : ""}`, model.id)));
+    if (!models.length && !action) { const unavailable = new Option(`${label} unavailable`, `__${label.toLowerCase().replaceAll(" ", "-")}-unavailable`); unavailable.disabled = true; group.append(unavailable); }
+    if (action) group.append(action);
+    return group;
+  });
+  const values = data.models.map(model => model.id); const content = [...groups];
+  if (!values.includes(selected)) { const placeholder = new Option("Select a model", "", true, true); placeholder.disabled = true; content.unshift(placeholder); }
+  select.replaceChildren(...content); if ([...select.options].some(option => option.value === selected)) select.value = selected;
+  applySelectedModelPrompt(); updateModelInstallAction(); modelReady = availableModels.some(model => model.id === activeModelId); start.disabled = !modelReady;
+}
+async function activateSelectedModel() { if ($("#routing-mode").value === customModelAction) { try { if (await addCustomModel()) return activateSelectedModel(); await loadModels(activeModelId); } catch (error) { await loadModels(activeModelId); fail(error.message); } return; } applySelectedModelPrompt(); updateModelInstallAction(); const model = selectedModel(); if (!model) return; modelLoading = true; modelReady = false; $("#routing-mode").disabled = true; start.disabled = true; $("#model-health").className = "model-health"; $("#model-status-label").textContent = "Loading model"; fail(); try { if (model.installable && (!model.installed || !model.runtime_available) && !(await installSelectedModel())) { $("#routing-mode").value = activeModelId; updateModelInstallAction(); modelReady = true; return; } const credentials = model.credential_required ? await requestCredentials(model) : {}; if (model.credential_required && !credentials) { $("#routing-mode").value = activeModelId; updateModelInstallAction(); modelReady = true; return; } await request("/v1/benchmark/models/activate", {model_id:model.id, ...credentials}); activeModelId = model.id; modelReady = true; finishInstallationVerification(); $("#model-health").className = "model-health ready"; $("#model-status-label").textContent = "Model ready"; } catch (error) { finishInstallationVerification(error); $("#routing-mode").value = activeModelId; updateModelInstallAction(); $("#model-health").className = "model-health degraded"; $("#model-status-label").textContent = "Model unavailable"; fail(error.message); } finally { modelLoading = false; $("#routing-mode").disabled = benchmarkStatus === "running" || benchmarkStatus === "paused"; start.disabled = benchmarkStatus === "running" || !modelReady; } }
 async function syncActiveModel() { if (modelLoading) return; try { const response = await fetch("/v1/benchmark/models"); if (!response.ok) return; const data = await response.json(); availableModels = data.models; activeModelId = data.active_model || "auto"; const select = $("#routing-mode"); if ([...select.options].some(option => option.value === activeModelId)) select.value = activeModelId; applySelectedModelPrompt(); updateModelInstallAction(); modelReady = true; select.disabled = benchmarkStatus === "running" || benchmarkStatus === "paused"; start.disabled = benchmarkStatus === "running"; $("#model-health").className = "model-health ready"; $("#model-status-label").textContent = "Model ready"; } catch { $("#model-health").className = "model-health degraded"; $("#model-status-label").textContent = "Model unavailable"; } }
 $("#routing-mode").onchange = () => { updateIdleArticleCopy(); activateSelectedModel(); };
 new ResourcePicker($("#routing-mode"), {

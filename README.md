@@ -30,7 +30,7 @@ This repository is intentionally small. This public repo contains the applicatio
 | Included in this repository | Acquired or created locally |
 | --- | --- |
 | FastAPI service and browser workbench | Base [Laya weights](https://huggingface.co/convaiinnovations/laya) |
-| Benchmark and fine-tuning code | Published [LayaCrime.v0 checkpoint](https://huggingface.co/leloss/layacrime) |
+| Benchmark and fine-tuning code | Published [LayaCrime.v0 checkpoint](https://huggingface.co/leloss/LayaCrime-v0) |
 | Academic comparison implementations and tests | Pinned upstream source checkouts and released checkpoints |
 | Public tuning set with 2,000 rows | Local GGUF language models selected by the user |
 | Independent public holdout with 1,000 rows | Custom datasets, prepared tensors, checkpoints, reports, and benchmark runs |
@@ -118,7 +118,7 @@ The Benchmark Console keeps task-specific classifiers and general-purpose langua
 - **Decision Models** contains the Laya router, the published LayaCrime.v0 checkpoint, and compatible local fine-tuned exports.
 - **Language Models** contains configured Azure deployments and installable local GGUF models served by llama.cpp.
 
-The bundled language-model catalog includes Qwen3 8B/14B, Qwen3.8 27B, Qwen3.6 and Qwen3.5 35B-A3B, Gemma 4 E4B/12B, two gpt-oss 20B quantizations, DeepSeek-R1-Distill-Qwen 14B, Mistral Small 3.2 24B, Devstral Small 2 24B, and Ministral 3 14B reasoning/instruct configurations. Selecting an unavailable GGUF model opens an installation monitor. Repository and file fields remain editable before download. The catalog uses single-file GGUF artifacts verified against Hugging Face metadata; models larger than T4 VRAM rely on llama.cpp's automatic layer offload to CPU memory. A model is not marked ready until its download receipt, GGUF signature, llama.cpp CUDA device, running process, and substantial VRAM allocation have all been verified.
+The bundled language-model catalog includes Azure deployments for GPT, Grok, and DeepSeek models alongside Qwen3 8B/14B, Qwen3.8 27B, Qwen3.6 and Qwen3.5 35B-A3B, Ternary Bonsai 27B, Gemma 4 E4B/12B, two gpt-oss 20B quantizations, DeepSeek-R1-Distill-Qwen 14B, Mistral Small 3.2 24B, Devstral Small 2 24B, and Ministral 3 14B reasoning/instruct configurations. The dropdown separates cloud LLMs from self-hosted LLMs; each section ends with its corresponding add action. A custom cloud connection requests a model name, API endpoint, and API key without persisting the credentials. Selecting an unavailable GGUF model opens an installation monitor. Repository and file fields remain editable before download. The catalog uses single-file GGUF artifacts verified against Hugging Face metadata; models larger than T4 VRAM rely on llama.cpp's automatic layer offload to CPU memory. A model is not marked ready until its download receipt, GGUF signature, llama.cpp CUDA device, running process, and substantial VRAM allocation have all been verified.
 
 The project pins a tested llama.cpp revision rather than tracking its moving `master` branch. llama.cpp remains the local runtime because it directly supports the catalog's GGUF files, structured OpenAI-compatible responses, and efficient T4 offload. Ollama and llama-cpp-python use the same underlying inference implementation, while replacing it with vLLM would require a different model-distribution and memory contract. Override `LLAMA_CPP_REVISION` only when deliberately qualifying a newer revision.
 
@@ -170,17 +170,15 @@ python scripts/benchmark_tartu_baseline.py \
 NewsMTSC requires its own Python 3.10 environment because the pinned upstream package requires Python below 3.12, Transformers 4.17--4.24, and PyTorch below 2.1. Clone the exact tested source revision and install it in that environment:
 
 ```bash
-python3.10 -m venv .venv-newsmtsc
-source .venv-newsmtsc/bin/activate
-git clone https://github.com/fhamborg/NewsMTSC third_party/NewsMTSC
-git -C third_party/NewsMTSC checkout b9d9b79704ed1b35cecaf1d7c2343dc1bd734fb7
-python -m pip install truststore
-python -m pip install --editable third_party/NewsMTSC
-python scripts/benchmark_newsmtsc_checkpoint.py \
+./scripts/setup_newsmtsc_environment.sh
+~/.cache/laya-adverse-media/newsmtsc-venv/bin/python \
+  scripts/benchmark_newsmtsc_checkpoint.py \
   --test-corpus datasets/adverse-media-public-holdout-1000/corpus.jsonl \
   --test-labels datasets/adverse-media-public-holdout-1000/annotations/human.jsonl \
   --output-root artifacts/academic-baselines
 ```
+
+The application detects this isolated environment automatically and exposes the official GRU-TSC v1 checkpoint in both model selectors. Set `LAYA_NEWSMTSC_PYTHON` when using a different environment path. The worker loads once, remains isolated from the main Laya dependency stack, and is terminated during application shutdown.
 
 Each runner supports `--limit-test` for an individual smoke test. The Khandpur runner additionally supports `--limit-training`. `scripts/compare_academic_baselines.py` consumes their prediction ledgers and produces paired McNemar and bootstrap comparisons against a LayaCrime ledger. Hosted article baselines are independently reproducible with `scripts/benchmark_public_holdout_llms.py`; credentials are read from the ignored `.env.local`, and outputs remain under `artifacts/llm-benchmark-runs/`.
 

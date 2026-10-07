@@ -11,9 +11,11 @@ from laya_adverse_media.app import (
     _fine_tuned_model_paths,
     _model_options,
     _resolve_training_parameters,
+    _SelectablePredictor,
     create_app,
 )
 from laya_adverse_media.benchmark import BenchmarkState, article_id
+from laya_adverse_media.benchmark_models import TemporaryCloudModelError
 
 
 class FakePredictor:
@@ -376,12 +378,131 @@ def test_model_options_are_sorted_newest_first(tmp_path) -> None:
     assert list(discovered) == ["crime-newer", "crime-older"]
     options = _model_options(predictor)
     assert [option["id"] for option in options] == [
+        "crime-layacrime-v0",
         "crime-newer",
         "crime-older",
         "auto",
     ]
-    assert options[0]["prompt"] == custom_prompt
+    assert options[1]["prompt"] == custom_prompt
     assert options[-1]["prompt"]["question"].startswith("How does this article")
+
+
+def test_selected_winner_has_canonical_model_option(tmp_path) -> None:
+    models_root = tmp_path / "models" / "fine-tuned"
+    winner = tmp_path / "winner"
+    for relative_path in (
+        "rl_agent_config.json",
+        "model.safetensors",
+        "encoder/config.json",
+        "tokenizer/tokenizer.json",
+        "tokenizer/tokenizer_config.json",
+    ):
+        path = winner / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+    from laya_adverse_media.app import _model_paths
+
+    predictor = type("Predictor", (), {"models": {
+        name: str(path) for name, path in _model_paths(models_root, winner).items()
+    }})()
+    option = _model_options(predictor)[0]
+
+    assert option["id"] == "crime-layacrime-v0"
+    assert option["label"] == "LayaCrime.v0 · Full-rate winner"
+    assert option["deletable"] is False
+
+
+def test_selected_winner_remains_installable_when_checkpoint_is_missing() -> None:
+    predictor = type("Predictor", (), {"models": {}})()
+
+    option = _model_options(predictor)[0]
+
+    assert option["id"] == "crime-layacrime-v0"
+    assert option["provider"] == "huggingface"
+    assert option["repo_id"] == "leloss/LayaCrime-v0"
+    assert option["installed"] is False
+    assert option["installable"] is True
+
+
+def test_selected_winner_install_downloads_validated_snapshot(
+    tmp_path, monkeypatch
+) -> None:
+    captured = {}
+
+    def fake_start(self, command, model_id, models_dir, cwd, **kwargs):
+        captured["command"] = command
+        captured["model_id"] = model_id
+        captured["models_dir"] = models_dir
+        captured.update(kwargs)
+        self.status = "running"
+        self.phase = "preparing"
+        self.model_id = model_id
+        self.models_dir = models_dir
+
+    monkeypatch.setenv("LAYA_FINE_TUNED_MODELS_DIR", str(tmp_path / "fine-tuned"))
+    monkeypatch.setattr(
+        "laya_adverse_media.app.ModelInstallationJob.start", fake_start
+    )
+
+    with TestClient(create_app(FakePredictor)) as client:
+        response = client.post(
+            "/v1/benchmark/models/install",
+            json={"model_id": "crime-layacrime-v0"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert captured["model_id"] == "crime-layacrime-v0"
+    assert "download_huggingface_snapshot.py" in " ".join(captured["command"])
+    assert "leloss/LayaCrime-v0" in captured["command"]
+    assert captured["command"].count("--required-file") == 5
+    assert captured["models_dir"] == tmp_path / "fine-tuned" / "layacrime-v0"
+
+
+def test_academic_model_is_selectable_for_individual_and_benchmark_use() -> None:
+    class Router:
+        loaded = ["english"]
+        models = {}
+
+        def unload(self):
+            self.loaded = []
+
+        def preload(self, models):
+            self.loaded = list(models)
+
+    class AcademicRuntime:
+        active_model = None
+
+        def options(self):
+            return [{
+                "id": "academic-test-model",
+                "label": "Academic test model",
+                "family": "academic",
+                "category": "decision",
+                "deletable": False,
+                "runtime_available": True,
+                "prompt": None,
+            }]
+
+        def activate(self, model_id):
+            self.active_model = model_id
+
+        def predict(self, article, entity_name, model_id):
+            return {"article": article, "entity": entity_name, "model": model_id}
+
+    predictor = _SelectablePredictor(Router(), {}, lambda path: None, AcademicRuntime())
+
+    assert _model_options(predictor)[-1]["id"] == "academic-test-model"
+    assert predictor.predict(
+        {"article": "Article", "entity_name": "Entity"},
+        {},
+        model="academic-test-model",
+    ) == {
+        "article": "Article",
+        "entity": "Entity",
+        "model": "academic-test-model",
+    }
+    assert predictor.active_model == "academic-test-model"
 
 
 def test_fine_tuned_model_can_be_deleted(tmp_path, monkeypatch) -> None:
@@ -803,6 +924,18 @@ def test_workbench_and_assets_are_served() -> None:
     assert 'id="edit-prompt"' in individual.text
     assert 'id="prompt-question"' in benchmark.text
     assert 'id="edit-prompt"' in benchmark.text
+    assert '<label>Model name<input id="azure-deployment"' in benchmark.text
+    assert '<label>API endpoint<input id="azure-endpoint"' in benchmark.text
+    assert '<label>API key<input id="azure-api-key"' in benchmark.text
+    assert '"Cloud LLMs"' in script.text
+    assert '"Self-hosted LLMs"' in script.text
+    assert "new Option(endpointAction.action_label, endpointAction.id)" in script.text
+    assert 'new Option("Add custom model…", customModelAction)' in script.text
+    assert "if (action) group.append(action)" in script.text
+    assert 'model.action_only ? ""' in script.text
+    assert '["paused", "error"].includes(report.status)' in script.text
+    assert 'interrupted ? "Resume run"' in script.text
+    assert "interruptedModelNeedsActivation" in script.text
     defaults = fine_tuning_status.json()["defaults"]
     assert defaults["default_training_strategy"] == "balanced"
     presets = {item["id"]: item for item in defaults["dataset_presets"]}
@@ -1223,6 +1356,104 @@ def test_failed_benchmark_resumes_without_reprocessing_completed_rows(tmp_path) 
     assert len(predictor.calls) == len(articles)
 
 
+def test_temporary_cloud_failure_pauses_and_resumes_paid_run(tmp_path) -> None:
+    corpus = tmp_path / "blind.jsonl"
+    gold = tmp_path / "gold.jsonl"
+    articles = [
+        {
+            "article_id": article_id(f"Entity {index}", f"Article {index}"),
+            "entity_name": f"Entity {index}",
+            "article": f"Article {index}",
+        }
+        for index in range(3)
+    ]
+    corpus.write_text(
+        "".join(json.dumps(row) + "\n" for row in articles), encoding="utf-8"
+    )
+    gold.write_text("", encoding="utf-8")
+
+    class CloudRuntime:
+        active_model = None
+        is_healthy = True
+
+        def __init__(self) -> None:
+            self.calls = []
+            self.failed = False
+
+        def activate(self, model_id, credentials=None, spec=None):
+            self.active_model = model_id
+            return model_id
+
+        def predict(self, article, entity_name):
+            self.calls.append(article)
+            if len(self.calls) == 2 and not self.failed:
+                self.failed = True
+                raise TemporaryCloudModelError("temporary no_capacity")
+            return {
+                "answers": {"criminal_association": {
+                    "choice": "A", "confidence": 1.0,
+                    "probabilities": {"A": 1.0, "B": 0.0},
+                }},
+                "routing": {"model": self.active_model, "provider": "azure"},
+            }
+
+        def close(self):
+            self.active_model = None
+
+    runtime = CloudRuntime()
+    app = create_app(FakePredictor, corpus, gold, tmp_path)
+    with TestClient(app) as client:
+        app.state.generative_runtime = runtime
+        activated = client.post("/v1/benchmark/models/activate", json={
+            "model_id": "grok-4-1-fast-reasoning",
+            "endpoint": "https://review.openai.azure.com/openai/v1/",
+            "deployment": "grok-4-1-fast-reasoning",
+            "api_key": "transient-key",
+        })
+        assert activated.status_code == 200, activated.text
+        assert client.post("/v1/benchmark/start", json={
+            "routing_mode": "grok-4-1-fast-reasoning"
+        }).status_code == 200
+        for _ in range(100):
+            report = client.get("/v1/benchmark").json()
+            if report["status"] == "paused":
+                break
+            time.sleep(0.01)
+
+        output = tmp_path / "laya-live.predictions.jsonl"
+        assert report["completed"] == 1
+        assert "no_capacity" in report["error"]
+        assert len(output.read_text(encoding="utf-8").splitlines()) == 1
+        changed = client.post("/v1/benchmark/models/activate", json={
+            "model_id": "gpt-6-luna",
+            "endpoint": "https://review.openai.azure.com/openai/v1/",
+            "deployment": "gpt-6-luna",
+            "api_key": "transient-key",
+        })
+        assert changed.status_code == 409
+        reactivated = client.post("/v1/benchmark/models/activate", json={
+            "model_id": "grok-4-1-fast-reasoning",
+            "endpoint": "https://review.openai.azure.com/openai/v1/",
+            "deployment": "grok-4-1-fast-reasoning",
+            "api_key": "transient-key",
+        })
+        assert reactivated.status_code == 200, reactivated.text
+        assert client.post("/v1/benchmark/start", json={
+            "routing_mode": "grok-4-1-fast-reasoning"
+        }).status_code == 200
+        for _ in range(100):
+            report = client.get("/v1/benchmark").json()
+            if report["status"] == "complete":
+                break
+            time.sleep(0.01)
+
+    saved = output.read_text(encoding="utf-8").splitlines()
+    assert report["status"] == "complete", report["error"]
+    assert len(saved) == len(articles)
+    assert len({json.loads(row)["article_id"] for row in saved}) == len(articles)
+    assert runtime.calls == ["Article 0", "Article 1", "Article 1", "Article 2"]
+
+
 def test_benchmark_resume_repairs_sparse_prediction_ledger(tmp_path) -> None:
     corpus = tmp_path / "blind.jsonl"
     gold = tmp_path / "gold.jsonl"
@@ -1454,3 +1685,33 @@ def test_benchmark_named_runs_can_be_saved_listed_and_loaded(tmp_path) -> None:
     assert "criteria" in first
     assert mismatched.status_code == 409
     assert "corpus fingerprint" in mismatched.json()["detail"]
+
+
+def test_benchmark_save_rejects_ledger_from_another_explicit_model(tmp_path) -> None:
+    corpus = tmp_path / "blind.jsonl"
+    gold = tmp_path / "gold.jsonl"
+    corpus.write_text(
+        json.dumps({
+            "article_id": "one",
+            "entity_name": "Acme",
+            "article": "Acme was charged.",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    gold.write_text("", encoding="utf-8")
+    app = create_app(FakePredictor, corpus, gold, tmp_path)
+
+    with TestClient(app) as client:
+        assert client.post("/v1/benchmark/start", json={}).status_code == 200
+        for _ in range(100):
+            if client.get("/v1/benchmark").json()["status"] == "complete":
+                break
+            time.sleep(0.01)
+        app.state.benchmark_routing_mode = "deepseek-r1-distill-qwen-14b-q4-k-m"
+
+        response = client.post(
+            "/v1/benchmark/runs/save", json={"name": "DeepSeek"}
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "prediction ledger does not match the selected model"

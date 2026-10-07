@@ -20,7 +20,7 @@ def test_environment_setup_only_provisions_dependencies_and_models() -> None:
     assert "scripts/setup_llama_cpp.sh" in content
     assert "scripts/download_huggingface_snapshot.py" in content
     assert "convaiinnovations/laya" in content
-    assert "leloss/layacrime" in content
+    assert "leloss/LayaCrime-v0" in content
     assert "fine_tune_laya.py train" not in content
     assert "run_ui.sh" in content
 
@@ -108,6 +108,15 @@ def test_optional_cli_trainer_requires_provisioned_environment() -> None:
     assert '"$PYTHON" "${train_args[@]}"' in content
     assert "pip install" not in content
     assert "snapshot_download" not in content
+
+
+def test_newsmtsc_setup_uses_isolated_pinned_environment() -> None:
+    content = script("setup_newsmtsc_environment.sh")
+
+    assert "newsmtsc-venv" in content
+    assert "b9d9b79704ed1b35cecaf1d7c2343dc1bd734fb7" in content
+    assert "Python 3.8-3.11" in content
+    assert 'pip install --editable "$SOURCE_DIR"' in content
 
 
 def test_fine_tuning_hub_repository_pattern_escapes_separator() -> None:

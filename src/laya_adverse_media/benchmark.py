@@ -136,6 +136,7 @@ class BenchmarkState:
                 self.error = None
                 self.audit = audit
             self.status = "running"
+            self.error = None
             self.pause_requested = False
 
     def begin_item(self, article: dict[str, Any]) -> None:
@@ -315,9 +316,10 @@ class BenchmarkState:
         with self._lock:
             return article_id in self.predictions
 
-    def paused(self) -> None:
+    def paused(self, error: Exception | None = None) -> None:
         with self._lock:
             self.status = "paused"
+            self.error = str(error) if error is not None else None
             self.pause_requested = False
 
     def finish(self) -> None:
