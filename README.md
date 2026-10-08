@@ -6,6 +6,8 @@ In a browser you can classify single articles, benchmark Laya against academic b
 
 ![Benchmark Console running on the public 1,000-article holdout](docs/assets/laya-crime-v0-benchmark-run.gif)
 
+The video above shows the real-time speed of LayaCrime. No speed-ups! LayaCrime-v0 averages 0.06 seconds per query (i.e., entity-article pair), making it one of the few viable and powerful AI-driven CSA solutions for modern compliance systems.
+
 ## The task
 
 Each request is one article and one named entity. The result is one of two decisions:
