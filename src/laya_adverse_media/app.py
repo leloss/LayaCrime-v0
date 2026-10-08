@@ -41,7 +41,6 @@ from .datasets import (
     discover_dataset_bundles,
     register_annotation_set,
     remove_annotation_set,
-    update_dataset_prompt,
     validate_prompt,
 )
 from .fine_tuning import FineTuningJob
@@ -69,18 +68,11 @@ class Predictor(Protocol):
     ) -> Mapping[str, Any]: ...
 
 
-class PromptCriterion(BaseModel):
-    decision: Literal["negative", "positive"]
-    text: str = Field(min_length=1, max_length=4000)
-
-
 class AdverseMediaRequest(BaseModel):
     article: str = Field(min_length=1, max_length=100_000)
     entity_name: str = Field(min_length=1, max_length=500)
     routing_mode: Literal["auto", "english", "multilingual"] = "auto"
     model_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
-    question: str | None = Field(default=None, min_length=1, max_length=4000)
-    criteria: list[PromptCriterion] | None = Field(default=None, min_length=2, max_length=20)
 
 
 class AdverseMediaResponse(BaseModel):
@@ -95,8 +87,6 @@ class AdverseMediaResponse(BaseModel):
 class BenchmarkStartRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=100_000)
     routing_mode: str = Field(default="auto", pattern=r"^(auto|[a-z0-9][a-z0-9-]{0,79})$")
-    question: str | None = Field(default=None, min_length=1, max_length=4000)
-    criteria: list[PromptCriterion] | None = Field(default=None, min_length=2, max_length=20)
 
 
 class ModelActivationRequest(BaseModel):
@@ -167,12 +157,6 @@ class FineTuningPrepareRequest(BaseModel):
     dataset_id: str | None = Field(
         default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,79}$"
     )
-
-
-class FineTuningPromptRequest(BaseModel):
-    dataset_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
-    question: str = Field(min_length=1, max_length=4000)
-    criteria: list[PromptCriterion] = Field(min_length=2, max_length=20)
 
 
 class FineTuningTrainRequest(BaseModel):
@@ -1923,9 +1907,8 @@ def create_app(
                     {"article": payload.article, "entity_name": payload.entity_name},
                     _questions(
                         payload.entity_name,
-                        payload.question or model_prompt["question"],
-                        [criterion.model_dump() for criterion in payload.criteria]
-                        if payload.criteria else model_prompt["criteria"],
+                        model_prompt["question"],
+                        model_prompt["criteria"],
                     ),
                     model=selected_model,
                 ),
@@ -2507,21 +2490,9 @@ def create_app(
                 )
             state.start(current["total"], current["audit"], resume=True)
         else:
-            if payload.criteria and {
-                criterion.decision for criterion in payload.criteria
-            } != {"negative", "positive"}:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Prompt criteria must include negative and positive decisions",
-                )
             model_prompt = _model_prompt(predictor, payload.routing_mode)
-            request.app.state.benchmark_question = (
-                payload.question or model_prompt["question"]
-            )
-            request.app.state.benchmark_criteria = (
-                [criterion.model_dump() for criterion in payload.criteria]
-                if payload.criteria else model_prompt["criteria"]
-            )
+            request.app.state.benchmark_question = model_prompt["question"]
+            request.app.state.benchmark_criteria = model_prompt["criteria"]
             selected_path = current_gold_path(request)
             rows, gold_by_id, human_by_id, audit = load_configured_benchmark(
                 selected_path
@@ -2974,30 +2945,6 @@ def create_app(
         except (OSError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return fine_tuning_snapshot(request)
-
-    @app.post("/v1/fine-tuning/prompt")
-    def fine_tuning_prompt(
-        payload: FineTuningPromptRequest, request: Request
-    ) -> dict[str, Any]:
-        require_fine_tuning()
-        bundle = dataset_bundles.get(payload.dataset_id)
-        if bundle is None:
-            raise HTTPException(status_code=422, detail="Unknown training dataset")
-        try:
-            updated = update_dataset_prompt(
-                bundle,
-                {
-                    "question": payload.question,
-                    "criteria": [criterion.model_dump() for criterion in payload.criteria],
-                },
-            )
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        dataset_bundles[payload.dataset_id] = updated
-        for preset in dataset_presets:
-            if preset.get("dataset_id") == payload.dataset_id:
-                preset["prompt"] = updated.prompt
-        return {"dataset_id": updated.id, "prompt": updated.prompt}
 
     @app.post("/v1/fine-tuning/train")
     def fine_tuning_train(

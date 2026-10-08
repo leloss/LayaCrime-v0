@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/fine-tuning.css?v=20261003-2">
+  <link rel="stylesheet" href="/static/fine-tuning.css?v=20261008-2">
   <link rel="stylesheet" href="/static/resource-picker.css?v=2">
 </head>
 <body>
@@ -33,7 +33,7 @@
       <div class="configuration">
         <section class="tool-section" id="dataset-section">
           <header><div><span>Step 1</span><h2>Dataset preparation</h2></div><button class="primary" id="prepare-button">Prepare dataset</button></header>
-          <div class="prompt-control"><div><span>Training prompt</span><b id="prompt-summary">Loading dataset prompt...</b></div><button id="edit-prompt" type="button">Edit prompt</button></div>
+          <div class="prompt-control"><div><span>Training prompt</span><b id="prompt-summary">Loading dataset prompt...</b></div><button id="see-prompt" type="button">See prompt</button></div>
           <div class="field-grid">
             <label>Random seed<input id="prepare-seed" type="number" min="0" value="20260923"></label>
             <label>Training set<select id="dataset-preset"><option value="">Custom external dataset</option></select></label>
@@ -134,14 +134,12 @@
     </form>
   </dialog>
   <dialog class="prompt-dialog" id="prompt-dialog">
-    <header><div><p class="eyebrow">Dataset metadata</p><h2>Training prompt</h2></div><button class="dialog-close" id="prompt-close" type="button" aria-label="Close prompt editor">&times;</button></header>
-    <div class="prompt-dialog-body">
-      <label>Question template<textarea id="prompt-question" maxlength="4000" required></textarea><small><code>{entity_name}</code> is replaced for every training example.</small></label>
-      <section><header><div><span>Decision rules</span><h3>Criteria</h3></div><button id="add-criterion" type="button">Add criterion</button></header><div id="criteria-list"></div></section>
-    </div>
-    <footer><button id="cancel-prompt" type="button">Cancel</button><button class="primary" id="save-prompt" type="button">Save to dataset</button></footer>
+    <header><div><span>Dataset metadata</span><h2 id="prompt-title">Training prompt</h2></div><button class="dialog-close" id="prompt-close" type="button" aria-label="Close prompt">×</button></header>
+    <div class="prompt-dialog-body" id="prompt-view"></div>
+    <footer><button class="primary" id="prompt-done" type="button">Close</button></footer>
   </dialog>
   <script src="/static/resource-picker.js?v=2" defer></script>
-  <script src="/static/fine-tuning.js?v=20261004-3" defer></script>
+  <script src="/static/prompt-viewer.js?v=1" defer></script>
+  <script src="/static/fine-tuning.js?v=20261008-2" defer></script>
 </body>
 </html>

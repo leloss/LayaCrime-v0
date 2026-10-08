@@ -536,6 +536,7 @@ def benchmark_model_options(models_dir: Path, llama_server: str | None = None) -
             "family": "generative",
             "category": "language",
             "credential_required": spec.provider == "azure",
+            "instruction": SYSTEM_PROMPT,
             "installed": installed,
             "installable": spec.provider == "llama.cpp",
             "installation_state": installation_state,

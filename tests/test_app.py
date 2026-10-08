@@ -232,7 +232,7 @@ def test_training_strategy_preserves_submitted_parameter_overrides() -> None:
     assert custom["epochs"] == 99
 
 
-def test_fine_tuning_prompt_is_editable_and_passed_to_preparation(
+def test_fine_tuning_dataset_prompt_is_passed_to_preparation(
     tmp_path, monkeypatch
 ) -> None:
     dataset_root = tmp_path / "datasets" / "public-training"
@@ -304,13 +304,9 @@ def test_fine_tuning_prompt_is_editable_and_passed_to_preparation(
             item for item in defaults["dataset_presets"]
             if item["dataset_id"] == "public-training"
         )
-        updated = client.post("/v1/fine-tuning/prompt", json={
+        edit = client.post("/v1/fine-tuning/prompt", json={
             "dataset_id": "public-training",
             "question": "Updated question for {entity_name}?",
-            "criteria": [
-                {"decision": "negative", "text": "Updated negative"},
-                {"decision": "positive", "text": "Updated positive"},
-            ],
         })
         prepared = client.post("/v1/fine-tuning/prepare", json={
             "label_source": "external",
@@ -326,9 +322,9 @@ def test_fine_tuning_prompt_is_editable_and_passed_to_preparation(
         })
 
     assert preset["prompt"]["question"] == "Original question for {entity_name}?"
-    assert updated.status_code == 200
+    assert edit.status_code in {404, 405}
     assert json.loads(manifest.read_text(encoding="utf-8"))["prompt"]["question"] == (
-        "Updated question for {entity_name}?"
+        "Original question for {entity_name}?"
     )
     assert prepared.status_code == 200, prepared.text
     assert captured["phase"] == "preparation"
@@ -856,7 +852,7 @@ def test_positive_low_confidence_decision_requires_review() -> None:
     assert response.json()["needs_review"] is True
 
 
-def test_adverse_media_forwards_custom_question_template() -> None:
+def test_adverse_media_always_uses_the_model_prompt() -> None:
     predictor = FakePredictor()
     with TestClient(create_app(lambda: predictor)) as client:
         response = client.post(
@@ -870,7 +866,7 @@ def test_adverse_media_forwards_custom_question_template() -> None:
 
     assert response.status_code == 200
     instructions = predictor.calls[0][1]["criminal_association"]["instructions"]
-    assert instructions == "Assess whether 'Acme Corp' planned or committed an offense."
+    assert instructions.startswith("How does this article portray 'Acme Corp'")
 
 
 def test_adverse_media_uses_selected_checkpoint_prompt_by_default(
@@ -965,10 +961,12 @@ def test_workbench_and_assets_are_served() -> None:
     assert fine_tuning.status_code == 200
     assert "Fine-Tuning Console" in fine_tuning.text
     assert 'id="training-strategy"' in fine_tuning.text
-    assert 'id="prompt-question"' in individual.text
-    assert 'id="edit-prompt"' in individual.text
-    assert 'id="prompt-question"' in benchmark.text
-    assert 'id="edit-prompt"' in benchmark.text
+    for page in (individual, benchmark):
+        assert 'id="see-prompt"' in page.text
+        assert 'id="prompt-view"' in page.text
+        assert "/static/prompt-viewer.js" in page.text
+        assert 'id="edit-prompt"' not in page.text
+        assert 'id="prompt-question"' not in page.text
     assert '<label>Model name<input id="azure-deployment"' in benchmark.text
     assert '<label>API endpoint<input id="azure-endpoint"' in benchmark.text
     assert '<label>API key<input id="azure-api-key"' in benchmark.text
@@ -1089,6 +1087,7 @@ def test_benchmark_scores_sequential_predictions_without_exposing_gold(tmp_path)
             json={
                 "routing_mode": "english",
                 "question": "Resolve {entity_name}, then assess criminal intent.",
+                "criteria": [{"decision": "negative", "text": "Only negative"}],
             },
         )
         assert started.status_code == 200
@@ -1100,7 +1099,8 @@ def test_benchmark_scores_sequential_predictions_without_exposing_gold(tmp_path)
 
     assert report["status"] == "complete", report["error"]
     assert report["completed"] == 2
-    assert report["question"] == "Resolve {entity_name}, then assess criminal intent."
+    assert report["question"].startswith("How does this article portray {entity_name}")
+    assert [criterion["decision"] for criterion in report["criteria"]] == ["negative", "positive"]
     assert report["confusion_matrices"]["gold"]["values"] == [[0, 1], [0, 1]]
     assert report["confusion_matrices"]["human"]["values"] == [[0, 1], [0, 1]]
     assert report["metrics"]["gold"]["accuracy"] == 0.5
@@ -1120,40 +1120,11 @@ def test_benchmark_scores_sequential_predictions_without_exposing_gold(tmp_path)
         questions["criminal_association"]["instructions"]
         for _, questions, _ in predictor.calls
     ] == [
-        "Resolve 'Acme', then assess criminal intent.",
-        "Resolve 'Beta', then assess criminal intent.",
+        "How does this article portray 'Acme' regarding criminal behavior or intent? "
+        "Judge only the named entity, not other people or organizations.",
+        "How does this article portray 'Beta' regarding criminal behavior or intent? "
+        "Judge only the named entity, not other people or organizations.",
     ]
-
-
-def test_benchmark_rejects_prompt_without_both_decisions(tmp_path) -> None:
-    corpus = tmp_path / "blind.jsonl"
-    gold = tmp_path / "gold.jsonl"
-    corpus.write_text(
-        json.dumps({
-            "article_id": "one",
-            "entity_name": "Acme",
-            "article": "Acme was charged.",
-        }) + "\n",
-        encoding="utf-8",
-    )
-    gold.write_text(
-        json.dumps({"article_id": "one", "label": 2}) + "\n",
-        encoding="utf-8",
-    )
-
-    with TestClient(create_app(FakePredictor, corpus, gold, tmp_path)) as client:
-        response = client.post(
-            "/v1/benchmark/start",
-            json={
-                "criteria": [
-                    {"decision": "negative", "text": "First negative"},
-                    {"decision": "negative", "text": "Second negative"},
-                ]
-            },
-        )
-
-    assert response.status_code == 422
-    assert "negative and positive" in response.json()["detail"]
 
 
 def test_benchmark_loads_active_evaluation_bundle(monkeypatch, tmp_path) -> None:
@@ -1650,7 +1621,6 @@ def test_benchmark_pending_item_includes_article_for_live_display() -> None:
     state.begin_item(article)
 
     assert state.snapshot()["pending"] == article
-
 
 
 

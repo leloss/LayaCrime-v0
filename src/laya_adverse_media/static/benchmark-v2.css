@@ -93,12 +93,16 @@
 .prompt-dialog-body > label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .prompt-dialog textarea { width: 100%; min-height: 76px; padding: 10px; resize: vertical; color: var(--ink); border: 1px solid var(--line); background: #fbfcfa; font: 12px/1.55 "Roboto Mono", monospace; }
 .prompt-dialog small { color: var(--muted); font-weight: 500; text-transform: none; }
-#criteria-list { display: grid; gap: 8px; margin-top: 10px; }
-.criterion-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) 38px; gap: 8px; align-items: start; }
-.criterion-row select, .criterion-row textarea { min-height: 38px; }
-.criterion-row textarea { height: 58px; }
-.criterion-row button { width: 38px; padding: 0; }
 .prompt-dialog > footer, .prompt-dialog > form > footer { padding: 12px 18px; border-top: 1px solid var(--line); justify-content: flex-end; }
+.prompt-view-section { display: grid; gap: 8px; }
+.prompt-view-section h3 { margin: 0; color: var(--green); font: 700 10px "DM Sans", sans-serif; text-transform: uppercase; }
+.prompt-view-text { margin: 0; color: var(--ink); font: 12px/1.6 "Roboto Mono", monospace; white-space: pre-wrap; }
+.prompt-view-criteria { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px 14px; margin: 0; }
+.prompt-view-criteria dt { font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.prompt-view-criteria dt.negative { color: var(--red); }
+.prompt-view-criteria dt.positive { color: var(--green); }
+.prompt-view-criteria dd { margin: 0; font: 12px/1.6 "Roboto Mono", monospace; }
+.prompt-view-note { margin: 0; padding-top: 14px; color: var(--muted); border-top: 1px solid var(--line); font-size: 11px; }
 .results-layout { min-height: 0; display: grid; grid-template-columns: minmax(360px, .85fr) minmax(0, 1.15fr); height: calc(100% - 72px); overflow: hidden; }
 .results-list { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border-right: 1px solid var(--line); }
 .results-list > p { margin: 0; padding: 12px 16px; color: var(--muted); border-bottom: 1px solid var(--line); font-size: 11px; }
@@ -141,9 +145,6 @@
   .controls, .label-library { grid-template-columns: 1fr; }
   .results-dialog { width: calc(100vw - 16px); height: calc(100vh - 16px); }
   .prompt-dialog { width: calc(100vw - 16px); }
-  .criterion-row { grid-template-columns: 1fr 38px; }
-  .criterion-row select, .criterion-row textarea { grid-column: 1; }
-  .criterion-row button { grid-column: 2; grid-row: 1 / span 2; }
   .results-layout { grid-template-columns: 1fr; grid-template-rows: minmax(240px, 42%) 1fr; }
   .results-list { border-right: 0; border-bottom: 1px solid var(--line); }
 }

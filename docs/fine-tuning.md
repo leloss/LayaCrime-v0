@@ -25,7 +25,7 @@ Labels are mapped as follows:
 
 The model input contains only the entity and article plus the same adverse-media question used by production inference. Labels are never serialized into model input. Dataset-bundle preparation records annotation provenance and hashes in the prepared manifest.
 
-The dataset prompt is tokenized during preparation, copied into the prepared manifest, and embedded in the exported `rl_agent_config.json`. Selecting a fine-tuned checkpoint in Individual Test or Benchmark loads that stored prompt by default. Per-run prompt edits remain explicit request overrides and are recorded in saved benchmark metadata.
+The dataset prompt is tokenized during preparation, copied into the prepared manifest, and embedded in the exported `rl_agent_config.json`. Individual Test and Benchmark always use the prompt stored in the selected checkpoint, and saved benchmark runs record it.
 
 ## Prepare data
 

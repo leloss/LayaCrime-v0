@@ -36,7 +36,7 @@ datasets/<dataset-id>/
 
 `dataset.json` uses `schema_version: 1`, gives the dataset a stable lowercase ID and display name, identifies the corpus path and hash, and lists annotation IDs, names, paths, row counts, and hashes. Paths must be relative and cannot leave the bundle.
 
-The manifest also owns the classification `prompt`. Its `question` may contain `{entity_name}` and its `criteria` contains 2 to 20 `{decision, text}` entries. Both `negative` and `positive` decisions are required. Fine-tuning preparation tokenizes this prompt with every example, copies it into the prepared-data manifest, and embeds it in the exported checkpoint. Edit it from the Fine-Tuning Console rather than separating prompt text from its dataset.
+The manifest also owns the classification `prompt`. Its `question` may contain `{entity_name}` and its `criteria` contains 2 to 20 `{decision, text}` entries. Both `negative` and `positive` decisions are required. Fine-tuning preparation tokenizes this prompt with every example, copies it into the prepared-data manifest, and embeds it in the exported checkpoint. The Fine-Tuning Console shows it read-only; change it in `dataset.json` when you build a bundle, and keep the prompt with its dataset.
 
 Set `purpose` to `evaluation-only` for an independent holdout bundle. Its annotations remain available to the benchmark console but are excluded from fine-tuning presets. The default purpose is `training-and-evaluation`.
 

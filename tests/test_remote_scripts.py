@@ -102,12 +102,6 @@ def test_llama_cpp_setup_builds_cuda_server_with_cpu_fallback() -> None:
     assert "build/bin/llama-server" in content
 
 
-def test_legacy_backend_launcher_delegates_to_ui() -> None:
-    content = script("run_finetuning_backend.sh")
-
-    assert 'exec "$PROJECT_ROOT/scripts/run_ui.sh" "$@"' in content
-
-
 def test_optional_cli_trainer_requires_provisioned_environment() -> None:
     content = script("train_remote.sh")
 

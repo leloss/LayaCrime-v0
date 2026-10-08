@@ -24,8 +24,7 @@ let configurationDisabled = false;
 let currentLossHistory = [];
 let actionError = "";
 let lastStatus = "idle";
-let promptQuestion = "";
-let promptCriteria = [];
+let datasetPrompt = null;
 const promptDialog = $("#prompt-dialog");
 const hasNumber = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 const percent = value => hasNumber(value) ? `${(Number(value) * 100).toFixed(1)}%` : "-";
@@ -142,52 +141,17 @@ function syncPreparedPartitions(defaults) {
   updatePartitionControls();
 }
 
-function updatePromptSummary() {
-  const summary = promptQuestion
-    ? `${promptQuestion.replace("{entity_name}", "Entity")} · ${promptCriteria.length} criteria`
-    : "Custom files use the default training prompt";
-  $("#prompt-summary").textContent = summary;
-}
-
 function applyDatasetPrompt(preset) {
-  promptQuestion = preset?.prompt?.question || "";
-  promptCriteria = structuredClone(preset?.prompt?.criteria || []);
-  updatePromptSummary();
-  $("#edit-prompt").disabled = configurationDisabled || !preset?.dataset_id;
-  $("#edit-prompt").title = preset?.dataset_id ? "Edit this dataset's training prompt" : "Prompt editing requires a dataset preset";
+  datasetPrompt = preset?.prompt || null;
+  $("#prompt-summary").textContent = datasetPrompt
+    ? PromptViewer.summary({prompt: datasetPrompt})
+    : "Custom files use the default training prompt";
+  $("#see-prompt").disabled = !datasetPrompt;
 }
 
-function criterionRow(criterion = {decision: "negative", text: ""}) {
-  const row = document.createElement("div"); row.className = "criterion-row";
-  const decision = document.createElement("select"); decision.append(new Option("Negative", "negative"), new Option("Positive", "positive")); decision.value = criterion.decision; decision.setAttribute("aria-label", "Criterion decision");
-  const text = document.createElement("textarea"); text.value = criterion.text; text.maxLength = 4000; text.required = true; text.setAttribute("aria-label", "Criterion text");
-  const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "×"; remove.title = "Remove criterion"; remove.setAttribute("aria-label", "Remove criterion"); remove.onclick = () => row.remove();
-  row.append(decision, text, remove); return row;
-}
-
-function openPromptEditor() {
-  $("#prompt-question").value = promptQuestion;
-  $("#criteria-list").replaceChildren(...promptCriteria.map(criterionRow));
+function openPrompt() {
+  PromptViewer.render($("#prompt-view"), {prompt: datasetPrompt});
   promptDialog.showModal();
-}
-
-async function savePrompt() {
-  const preset = datasetPresets.find(item => item.id === value("dataset-preset"));
-  if (!preset?.dataset_id) return;
-  const question = $("#prompt-question").value.trim();
-  const criteria = [...$("#criteria-list").children].map(row => ({decision: row.querySelector("select").value, text: row.querySelector("textarea").value.trim()}));
-  if (!question) return $("#prompt-question").reportValidity();
-  if (criteria.length < 2) return fail("Prompt criteria must contain at least two entries.");
-  const blank = [...$("#criteria-list textarea")].find(input => !input.value.trim());
-  if (blank) return blank.reportValidity();
-  if (!["negative", "positive"].every(decision => criteria.some(criterion => criterion.decision === decision))) return fail("Prompt criteria must include negative and positive decisions.");
-  try {
-    const data = await request("/v1/fine-tuning/prompt", {dataset_id: preset.dataset_id, question, criteria});
-    datasetPresets.filter(item => item.dataset_id === preset.dataset_id).forEach(item => { item.prompt = structuredClone(data.prompt); });
-    applyDatasetPrompt(preset);
-    fail();
-    promptDialog.close();
-  } catch (error) { fail(error.message); }
 }
 
 function preparePayload() {
@@ -409,7 +373,6 @@ function setInputsDisabled(disabled) {
   $("#reset-author-parameters").disabled = disabled || !authorTrainingPreset;
   $("#model-preset").disabled = disabled || !modelPresets.length;
   updatePartitionControls();
-  $("#edit-prompt").disabled = disabled || !datasetPresets.find(item => item.id === value("dataset-preset"))?.dataset_id;
   applyTrainingStrategy(false, false);
 }
 
@@ -739,11 +702,9 @@ new ResourcePicker($("#dataset-preset"), {
   onError: error => fail(error.message),
 });
 $("#partition-strategy").onchange = updatePartitionControls;
-$("#edit-prompt").onclick = openPromptEditor;
-$("#add-criterion").onclick = () => $("#criteria-list").append(criterionRow());
+$("#see-prompt").onclick = openPrompt;
 $("#prompt-close").onclick = () => promptDialog.close();
-$("#cancel-prompt").onclick = () => promptDialog.close();
-$("#save-prompt").onclick = savePrompt;
+$("#prompt-done").onclick = () => promptDialog.close();
 window.addEventListener("resize", () => {
   drawLossChart(currentLossHistory, number("epochs"));
   drawAccuracyChart(currentLossHistory, number("epochs"));

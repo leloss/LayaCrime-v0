@@ -7,7 +7,6 @@ from laya_adverse_media.datasets import (
     load_dataset_bundle,
     register_annotation_set,
     remove_annotation_set,
-    update_dataset_prompt,
 )
 
 
@@ -189,38 +188,3 @@ def test_register_annotation_set_updates_manifest_atomically(tmp_path) -> None:
     assert not uploaded.exists()
     with pytest.raises(PermissionError, match="built-in"):
         remove_annotation_set(removed, "original")
-
-
-def test_update_dataset_prompt_persists_with_bundle(tmp_path) -> None:
-    root = tmp_path / "example"
-    annotations = root / "annotations"
-    annotations.mkdir(parents=True)
-    (root / "corpus.jsonl").write_text("", encoding="utf-8")
-    (annotations / "labels.jsonl").write_text("", encoding="utf-8")
-    manifest = root / "dataset.json"
-    manifest.write_text(
-        json.dumps({
-            "schema_version": 1,
-            "id": "example",
-            "name": "Example dataset",
-            "corpus": {"path": "corpus.jsonl"},
-            "annotations": [{
-                "id": "labels",
-                "name": "Labels",
-                "path": "annotations/labels.jsonl",
-            }],
-        }),
-        encoding="utf-8",
-    )
-    prompt = {
-        "question": "Does {entity_name} show criminal intent?",
-        "criteria": [
-            {"decision": "negative", "text": "planned an offense"},
-            {"decision": "positive", "text": "no offense was planned"},
-        ],
-    }
-
-    updated = update_dataset_prompt(load_dataset_bundle(manifest), prompt)
-
-    assert updated.prompt == prompt
-    assert json.loads(manifest.read_text(encoding="utf-8"))["prompt"] == prompt

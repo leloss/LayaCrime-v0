@@ -180,18 +180,6 @@ def load_dataset_bundle(manifest_path: Path) -> DatasetBundle:
     )
 
 
-def update_dataset_prompt(bundle: DatasetBundle, prompt: object) -> DatasetBundle:
-    manifest = dict(bundle.manifest)
-    manifest["prompt"] = validate_prompt(prompt)
-    manifest_path = bundle.root / "dataset.json"
-    temporary = manifest_path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    os.replace(temporary, manifest_path)
-    return load_dataset_bundle(manifest_path)
-
-
 def discover_dataset_bundles(root: Path) -> dict[str, DatasetBundle]:
     if not root.is_dir():
         return {}

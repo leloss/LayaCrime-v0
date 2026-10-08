@@ -20,41 +20,17 @@ let installLogIndex = 0;
 let installationAwaitingActivation = false;
 let activeLabelName = "External labels";
 let resultFilter = null;
-let promptInitialized = false;
-let questionTemplate = "How does this article portray {entity_name} regarding criminal behavior or intent? Judge only the named entity, not other people or organizations.";
-let promptCriteria = [
-  {decision: "negative", text: "negative: the article credibly associates the entity with alleged, investigated, charged, convicted, sanctioned, or admitted criminal behavior or intent"},
-  {decision: "positive", text: "positive: the article does not associate the entity with criminal behavior or intent, or identifies the entity only as a victim, witness, investigator, or unrelated party"},
-];
 const resultPageSize = 100;
 const customModelAction = "__add-custom-model";
 const pct = (v) => `${((v || 0) * 100).toFixed(1)}%`;
 const clock = (v) => `${Math.floor((v || 0) / 60)}:${Math.floor((v || 0) % 60).toString().padStart(2, "0")}`;
 function fail(message = "") { errorBox.textContent = message; errorBox.hidden = !message; }
-function updatePromptSummary() { $("#prompt-summary").textContent = `${questionTemplate.replace("{entity_name}", "Entity")} · ${promptCriteria.length} criteria`; }
-function applySelectedModelPrompt() {
-  const model = availableModels.find(item => item.id === $("#routing-mode").value);
-  if (!model?.prompt) return;
-  questionTemplate = model.prompt.question;
-  promptCriteria = structuredClone(model.prompt.criteria);
-  promptInitialized = true;
-  updatePromptSummary();
-}
-function criterionRow(criterion = {decision: "negative", text: ""}) {
-  const row = document.createElement("div"); row.className = "criterion-row";
-  const decision = document.createElement("select"); decision.append(new Option("Negative", "negative"), new Option("Positive", "positive")); decision.value = criterion.decision; decision.setAttribute("aria-label", "Criterion decision");
-  const text = document.createElement("textarea"); text.value = criterion.text; text.maxLength = 4000; text.required = true; text.setAttribute("aria-label", "Criterion text");
-  const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "×"; remove.title = "Remove criterion"; remove.setAttribute("aria-label", "Remove criterion"); remove.onclick = () => row.remove();
-  row.append(decision, text, remove); return row;
-}
-function openPromptEditor() { $("#prompt-question").value = questionTemplate; $("#criteria-list").replaceChildren(...promptCriteria.map(criterionRow)); promptDialog.showModal(); }
-function savePrompt() {
-  const question = $("#prompt-question").value.trim();
-  const criteria = [...$("#criteria-list").children].map(row => ({decision:row.querySelector("select").value, text:row.querySelector("textarea").value.trim()}));
-  if (!question) return $("#prompt-question").reportValidity();
-  if (criteria.some(criterion => !criterion.text)) return [...$("#criteria-list textarea")].find(input => !input.value.trim()).reportValidity();
-  if (!["negative", "positive"].every(decision => criteria.some(criterion => criterion.decision === decision))) { fail("Prompt criteria must include negative and positive decisions"); return; }
-  questionTemplate = question; promptCriteria = criteria; updatePromptSummary(); fail(); promptDialog.close();
+function applySelectedModelPrompt() { $("#prompt-summary").textContent = PromptViewer.summary(selectedModel()); }
+function openPrompt() {
+  const model = selectedModel();
+  $("#prompt-title").textContent = model ? `${model.label} prompt` : "Benchmark prompt";
+  PromptViewer.render($("#prompt-view"), model);
+  promptDialog.showModal();
 }
 async function request(path, body) { const response = await fetch(path, body === undefined ? {} : {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); const data = await response.json(); if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Benchmark request failed"); return data; }
 function selectedModel() { return availableModels.find(item => item.id === $("#routing-mode").value); }
@@ -325,12 +301,6 @@ function drawConfidence() {
 function render(report) {
   audit(report.audit); const running = report.status === "running";
   const interrupted = ["paused", "error"].includes(report.status) && report.completed < report.total;
-  if (!promptInitialized && report.question && Array.isArray(report.criteria)) {
-    questionTemplate = report.question;
-    promptCriteria = report.criteria;
-    promptInitialized = true;
-    updatePromptSummary();
-  }
   const startingRun = running && benchmarkStatus !== "running" && benchmarkStatus !== "paused";
   if (startingRun || !probabilityTotal) probabilityTotal = report.total || report.audit.blind_articles || 0;
   benchmarkStatus = report.status;
@@ -338,7 +308,6 @@ function render(report) {
   start.textContent = interrupted ? "Resume run" : running ? "Running" : report.status === "complete" ? "Run again" : "Start run"; start.disabled = running || modelLoading || !modelReady || interruptedModelNeedsActivation; pause.disabled = !running;
   loadRun.disabled = running || !savedRun.value;
   $("#routing-mode").disabled = running || (interrupted && !interruptedModelNeedsActivation) || modelLoading; $("#sample-limit").disabled = running || interrupted;
-  $("#edit-prompt").disabled = running || interrupted;
   labelSet.disabled = running || interrupted; labelFile.disabled = running || interrupted; uploadLabels.disabled = running || interrupted || !labelFile.files.length;
   $("#progress-count").textContent = `${report.completed.toLocaleString()} / ${report.total.toLocaleString()}`; $("#progress-percent").textContent = pct(report.progress); $("#overall-progress").style.width = pct(report.progress);
   const primary = report.metrics.gold;
@@ -376,7 +345,7 @@ const groundTruthValue = (datasetId, labelSetId) => `${datasetId || ""}\u001f${l
 async function loadLabelSets(selected) { const data = await request("/v1/benchmark/label-sets"); deletableLabelSets = new Set(data.label_sets.filter(item => item.deletable).map(item => groundTruthValue(item.dataset_id, item.id))); labelSet.replaceChildren(...data.label_sets.map(item => new Option(`${item.dataset_label} · ${item.label} · ${item.rows.toLocaleString()} labels`, groundTruthValue(item.dataset_id, item.id)))); labelSet.value = selected || groundTruthValue(data.dataset?.id, data.active_label_set); const option = labelSet.selectedOptions[0]; if (option) activeLabelName = option.textContent.replace(/^.* · ([^·]+) · [\d,]+ labels$/, "$1").trim(); }
 async function activateSelectedLabels() { try { const [dataset_id, label_set_id] = labelSet.value.split("\u001f"); const data = await request("/v1/benchmark/label-sets/activate", {dataset_id:dataset_id || null, label_set_id}); lastId = null; probabilitySeries = []; probabilityTotal = 0; activeLabelName = data.audit.label_set.label; await refreshRuns(); audit(data.audit); await status(); } catch (error) { fail(error.message); await loadLabelSets(); } }
 async function uploadLabelFile() { try { const file = labelFile.files[0]; if (!file) return; uploadLabels.disabled = true; const data = await request("/v1/benchmark/label-sets/upload", {name:$("#label-set-name").value.trim() || file.name.replace(/\.jsonl$/i, ""), content:await file.text()}); await loadLabelSets(data.active_label_set); activeLabelName = data.audit.label_set.label; audit(data.audit); labelFile.value = ""; $("#label-set-name").value = ""; } catch (error) { fail(error.message); } finally { uploadLabels.disabled = !labelFile.files.length; } }
-start.onclick = async () => { try { const value = $("#sample-limit").value; await command("/v1/benchmark/start", {routing_mode:$("#routing-mode").value, limit:value ? Number(value) : null, question:questionTemplate, criteria:promptCriteria}); } catch (error) { fail(error.message); } };
+start.onclick = async () => { try { const value = $("#sample-limit").value; await command("/v1/benchmark/start", {routing_mode:$("#routing-mode").value, limit:value ? Number(value) : null}); } catch (error) { fail(error.message); } };
 pause.onclick = async () => { try { await command("/v1/benchmark/pause"); } catch (error) { fail(error.message); } };
 $("#reset-button").onclick = async () => { try { lastId = null; probabilitySeries = []; probabilityTotal = 0; await command("/v1/benchmark/reset"); } catch (error) { fail(error.message); } };
 loadRun.onclick = async () => { try { if (!savedRun.value) return; lastId = null; probabilitySeries = []; probabilityTotal = 0; await command("/v1/benchmark/runs/load", {run_id:savedRun.value}); await loadLabelSets(); } catch (error) { fail(error.message); } };
@@ -388,11 +357,9 @@ document.querySelectorAll(".matrix-cell").forEach(cell => cell.addEventListener(
 $("#results-close").onclick = () => resultsDialog.close();
 $("#results-previous").onclick = () => loadMatrixResults(Math.max(0, resultFilter.offset - resultPageSize)).catch(error => fail(error.message));
 $("#results-next").onclick = () => loadMatrixResults(resultFilter.offset + resultPageSize).catch(error => fail(error.message));
-$("#edit-prompt").onclick = openPromptEditor;
-$("#add-criterion").onclick = () => $("#criteria-list").append(criterionRow());
+$("#see-prompt").onclick = openPrompt;
 $("#prompt-close").onclick = () => promptDialog.close();
-$("#cancel-prompt").onclick = () => promptDialog.close();
-$("#save-prompt").onclick = savePrompt;
+$("#prompt-done").onclick = () => promptDialog.close();
 async function health() { try { const data = await (await fetch("/health")).json(), ready = data.status === "ok"; $("#model-health").className = `model-health ${ready ? "ready" : data.status === "warming" ? "" : "degraded"}`; $("#model-status-label").textContent = ready ? "Model ready" : data.status === "warming" ? "Loading catalog" : "Laya unavailable"; await loadModels(); if (data.status === "warming") setTimeout(health, 1500); if (data.error && !availableModels.length) fail(data.error); } catch (error) { fail(error.message); } }
 async function loadModels(selectedId = null) {
   const response = await fetch("/v1/benchmark/models"); if (!response.ok) return;

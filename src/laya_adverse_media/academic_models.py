@@ -187,6 +187,10 @@ class AcademicModelRuntime:
             "runtime_available": khandpur_available,
             "availability_error": khandpur_error,
             "prompt": None,
+            "method": (
+                "Logistic regression over word n-grams around each mention of the entity, "
+                "trained on the public 2,000-article tuning set."
+            ),
         }, {
             "id": ACADEMIC_NEWSMTSC_ID,
             "label": "NewsMTSC · GRU-TSC v1 sentiment transfer",
@@ -200,6 +204,10 @@ class AcademicModelRuntime:
                 else f"isolated NewsMTSC environment is missing; {ACADEMIC_SETUP_HINT}"
             ),
             "prompt": None,
+            "method": (
+                "The published GRU-TSC news sentiment model scores the sentence that mentions "
+                "the entity; negative sentiment toward the entity is reported as negative."
+            ),
         }, {
             "id": ACADEMIC_TARTU_ID,
             "label": "Tartu · TF-IDF + multinomial NB",
@@ -209,6 +217,10 @@ class AcademicModelRuntime:
             "runtime_available": tartu_available,
             "availability_error": tartu_error,
             "prompt": None,
+            "method": (
+                "TF-IDF with multinomial naive Bayes trained on the Tartu project's released "
+                "adverse-media articles; it classifies the whole article, not the entity."
+            ),
         }]
 
     def activate(self, model_id: str) -> None:

@@ -12,11 +12,6 @@ let availableModels = [];
 let activeModelId = "auto";
 let installPollTimer = null;
 let installLogIndex = 0;
-let questionTemplate = "How does this article portray {entity_name} regarding criminal behavior or intent? Judge only the named entity, not other people or organizations.";
-let promptCriteria = [
-  {decision: "negative", text: "negative: the article credibly associates the entity with alleged, investigated, charged, convicted, sanctioned, or admitted criminal behavior or intent"},
-  {decision: "positive", text: "positive: the article does not associate the entity with criminal behavior or intent, or identifies the entity only as a victim, witness, investigator, or unrelated party"},
-];
 const pct = value => `${((value || 0) * 100).toFixed(1)}%`;
 
 function fail(message = "") {
@@ -48,30 +43,19 @@ function selectedModel() {
   return availableModels.find(item => item.id === modelSelect.value);
 }
 
-function isLanguageModel(model) {
-  return model?.category === "language";
-}
-
 function setActiveModel() {
   $("#active-model").textContent = selectedModel()?.label || "No model available";
 }
 
-function updatePromptControl() {
-  const languageModel = isLanguageModel(selectedModel());
-  $("#edit-prompt").disabled = languageModel;
-  $("#edit-prompt").title = languageModel ? "Language models use the fixed benchmark instruction" : "";
-  $("#prompt-summary").textContent = languageModel
-    ? "Fixed language-model instruction"
-    : `${questionTemplate.replace("{entity_name}", "Entity")} · ${promptCriteria.length} criteria`;
+function applySelectedModelPrompt() {
+  $("#prompt-summary").textContent = PromptViewer.summary(selectedModel());
 }
 
-function applySelectedModelPrompt() {
+function openPrompt() {
   const model = selectedModel();
-  if (model?.prompt) {
-    questionTemplate = model.prompt.question;
-    promptCriteria = structuredClone(model.prompt.criteria);
-  }
-  updatePromptControl();
+  $("#prompt-title").textContent = model ? `${model.label} prompt` : "Inference prompt";
+  PromptViewer.render($("#prompt-view"), model);
+  promptDialog.showModal();
 }
 
 function updateModelInstallAction() {
@@ -417,53 +401,6 @@ function render(result, elapsed) {
   $("#elapsed-time").textContent = `${elapsed.toFixed(2)}s`;
 }
 
-function criterionRow(criterion = {decision: "negative", text: ""}) {
-  const row = document.createElement("div");
-  row.className = "criterion-row";
-  const decision = document.createElement("select");
-  decision.append(new Option("Negative", "negative"), new Option("Positive", "positive"));
-  decision.value = criterion.decision;
-  decision.setAttribute("aria-label", "Criterion decision");
-  const text = document.createElement("textarea");
-  text.value = criterion.text;
-  text.maxLength = 4000;
-  text.required = true;
-  text.setAttribute("aria-label", "Criterion text");
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.textContent = "×";
-  remove.title = "Remove criterion";
-  remove.setAttribute("aria-label", "Remove criterion");
-  remove.onclick = () => row.remove();
-  row.append(decision, text, remove);
-  return row;
-}
-
-function openPromptEditor() {
-  $("#prompt-question").value = questionTemplate;
-  $("#criteria-list").replaceChildren(...promptCriteria.map(criterionRow));
-  promptDialog.showModal();
-}
-
-function savePrompt() {
-  const question = $("#prompt-question").value.trim();
-  const criteria = [...$("#criteria-list").children].map(row => ({
-    decision: row.querySelector("select").value,
-    text: row.querySelector("textarea").value.trim(),
-  }));
-  if (!question) return $("#prompt-question").reportValidity();
-  if (criteria.some(criterion => !criterion.text)) return [...$("#criteria-list textarea")].find(input => !input.value.trim()).reportValidity();
-  if (!["negative", "positive"].every(decision => criteria.some(criterion => criterion.decision === decision))) {
-    fail("Prompt criteria must include negative and positive decisions");
-    return;
-  }
-  questionTemplate = question;
-  promptCriteria = criteria;
-  updatePromptControl();
-  fail();
-  promptDialog.close();
-}
-
 articleInput.addEventListener("input", () => {
   $("#character-count").textContent = `${articleInput.value.length.toLocaleString()} characters`;
 });
@@ -475,12 +412,9 @@ form.addEventListener("submit", async event => {
   runButton.textContent = "Running...";
   const started = performance.now();
   try {
-    const languageModel = isLanguageModel(selectedModel());
     const data = await request("/v1/adverse-media", {
       entity_name: $("#entity-name").value.trim(),
       article: articleInput.value.trim(),
-      question: languageModel ? null : questionTemplate,
-      criteria: languageModel ? null : promptCriteria,
       model_id: modelSelect.value === "auto" ? null : modelSelect.value,
     });
     render(data, (performance.now() - started) / 1000);
@@ -492,11 +426,9 @@ form.addEventListener("submit", async event => {
   }
 });
 
-$("#edit-prompt").onclick = openPromptEditor;
-$("#add-criterion").onclick = () => $("#criteria-list").append(criterionRow());
+$("#see-prompt").onclick = openPrompt;
 $("#prompt-close").onclick = () => promptDialog.close();
-$("#cancel-prompt").onclick = () => promptDialog.close();
-$("#save-prompt").onclick = savePrompt;
+$("#prompt-done").onclick = () => promptDialog.close();
 $("#install-model").onclick = () => installSelectedModel()
   .then(installed => { if (installed) return activateSelectedModel(); updateModelInstallAction(); })
   .catch(error => fail(error.message));

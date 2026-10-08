@@ -31,6 +31,7 @@ REQUIRED_RELEASE_FILES = {
     "tests/test_benchmark_tartu_baseline.py",
     "tests/test_compare_academic_baselines.py",
 }
+MAX_FILE_BYTES = 20_000_000
 MODEL_SUFFIXES = {".bin", ".ckpt", ".gguf", ".onnx", ".pt", ".pth", ".safetensors"}
 PRIVATE_ANNOTATION_FILES = {
     "docs/annotation-rubric.md",
@@ -86,6 +87,8 @@ def violation(path: Path) -> str | None:
             return "only human annotations ship; consensus labels and training subsets are private"
     if path.suffix.casefold() in MODEL_SUFFIXES:
         return "model weight files must not ship in the repository"
+    if path.stat().st_size > MAX_FILE_BYTES:
+        return f"files over {MAX_FILE_BYTES // 1_000_000} MB bloat every clone; shrink or host it elsewhere"
     return None
 
 
