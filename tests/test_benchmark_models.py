@@ -18,6 +18,7 @@ from laya_adverse_media.benchmark_models import (
     _matching_orphaned_server_pids,
     benchmark_model_options,
     model_installation_receipt_path,
+    project_llama_runtime_backend,
     register_custom_model,
     registered_model_by_id,
     resolve_llama_server,
@@ -1013,6 +1014,28 @@ def test_llama_server_is_rediscovered_after_runtime_creation(tmp_path: Path) -> 
     assert resolve_llama_server(str(executable)) is None
     executable.write_bytes(b"runtime")
     assert resolve_llama_server(str(executable)) == str(executable.resolve())
+
+
+@pytest.mark.parametrize(
+    ("stamp", "cuda_enabled", "expected"),
+    [
+        ("revision=abc\n", True, "cuda"),
+        ("revision=abc\n", False, None),
+        ("backend=cuda\nrevision=abc\n", False, None),
+        ("backend=cpu\nrevision=abc\n", False, "cpu"),
+        ("backend=metal\nrevision=abc\n", False, "metal"),
+        (None, True, None),
+    ],
+)
+def test_project_llama_runtime_backend_requires_verified_stamp(
+    tmp_path: Path, stamp: str | None, cuda_enabled: bool, expected: str | None
+) -> None:
+    flag = "ON" if cuda_enabled else "OFF"
+    (tmp_path / "CMakeCache.txt").write_text(f"GGML_CUDA:BOOL={flag}\n", encoding="utf-8")
+    if stamp is not None:
+        (tmp_path / "laya-cuda-runtime.ok").write_text(stamp, encoding="utf-8")
+
+    assert project_llama_runtime_backend(tmp_path) == expected
 
 
 def test_cuda_verification_accepts_gpu_layer_offload(tmp_path: Path) -> None:

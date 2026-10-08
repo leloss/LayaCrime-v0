@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import os
 import re
@@ -18,6 +19,11 @@ TARTU_CLEANUP_PATTERN = re.compile(
     r"(http\S+)|(#(\w+))|(@(\w+))|[^\w\s]|(\w*\d\w*)"
 )
 TARTU_WHITESPACE_PATTERN = re.compile(r"(\s+)|(\n+)")
+ACADEMIC_SETUP_HINT = "run scripts/setup_academic_models.sh"
+
+
+def _modules_available(*names: str) -> bool:
+    return all(importlib.util.find_spec(name) is not None for name in names)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -139,20 +145,39 @@ class AcademicModelRuntime:
 
     def options(self) -> list[dict[str, Any]]:
         tuning = self.project_root / "datasets" / "adverse-media-public-tuning-2000"
-        khandpur_available = (tuning / "corpus.jsonl").is_file() and (
+        khandpur_error = None
+        if not ((tuning / "corpus.jsonl").is_file() and (
             tuning / "annotations" / "human.jsonl"
-        ).is_file()
+        ).is_file()):
+            khandpur_error = "public tuning dataset is missing"
+        elif not _modules_available("numpy", "sklearn"):
+            khandpur_error = f"scikit-learn is not installed; {ACADEMIC_SETUP_HINT}"
+        khandpur_available = khandpur_error is None
         tartu = self.project_root / "third_party" / "ut-ml-adverse-media"
-        tartu_available = all(
+        tartu_error = None
+        if not all(
             (tartu / filename).is_file()
             for filename in (
                 "adverse_media_training.csv.zip",
                 "non_adverse_media_training.csv.zip",
             )
-        )
+        ):
+            tartu_error = f"released Tartu training data is missing; {ACADEMIC_SETUP_HINT}"
+        elif not _modules_available("numpy", "sklearn", "spacy", "en_core_web_sm"):
+            tartu_error = (
+                f"scikit-learn, spaCy, or en_core_web_sm is not installed; {ACADEMIC_SETUP_HINT}"
+            )
+        tartu_available = tartu_error is None
         newsmtsc_python = _newsmtsc_python(self.project_root)
         newsmtsc_source = self.project_root / "third_party" / "NewsMTSC" / "NewsSentiment"
-        newsmtsc_available = newsmtsc_python is not None and newsmtsc_source.is_dir()
+        newsmtsc_encoder = (
+            newsmtsc_source
+            / "pretrained_models"
+            / os.environ.get("LAYA_NEWSMTSC_PRETRAINED_MODEL", "roberta-base")
+        )
+        newsmtsc_available = (
+            newsmtsc_python is not None and (newsmtsc_encoder / "config.json").is_file()
+        )
         return [{
             "id": ACADEMIC_KHANDPUR_ID,
             "label": "Khandpur · Entity-relevance component",
@@ -160,9 +185,7 @@ class AcademicModelRuntime:
             "category": "decision",
             "deletable": False,
             "runtime_available": khandpur_available,
-            "availability_error": (
-                None if khandpur_available else "public tuning dataset is missing"
-            ),
+            "availability_error": khandpur_error,
             "prompt": None,
         }, {
             "id": ACADEMIC_NEWSMTSC_ID,
@@ -174,7 +197,7 @@ class AcademicModelRuntime:
             "availability_error": (
                 None
                 if newsmtsc_available
-                else "isolated NewsMTSC environment is missing"
+                else f"isolated NewsMTSC environment is missing; {ACADEMIC_SETUP_HINT}"
             ),
             "prompt": None,
         }, {
@@ -184,9 +207,7 @@ class AcademicModelRuntime:
             "category": "decision",
             "deletable": False,
             "runtime_available": tartu_available,
-            "availability_error": (
-                None if tartu_available else "released Tartu training data is missing"
-            ),
+            "availability_error": tartu_error,
             "prompt": None,
         }]
 

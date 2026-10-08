@@ -378,7 +378,7 @@ def test_model_options_are_sorted_newest_first(tmp_path) -> None:
     assert list(discovered) == ["crime-newer", "crime-older"]
     options = _model_options(predictor)
     assert [option["id"] for option in options] == [
-        "crime-layacrime-v0",
+        "crime-layacrime-public",
         "crime-newer",
         "crime-older",
         "auto",
@@ -387,9 +387,9 @@ def test_model_options_are_sorted_newest_first(tmp_path) -> None:
     assert options[-1]["prompt"]["question"].startswith("How does this article")
 
 
-def test_selected_winner_has_canonical_model_option(tmp_path) -> None:
+def test_public_checkpoint_has_canonical_model_option(tmp_path) -> None:
     models_root = tmp_path / "models" / "fine-tuned"
-    winner = tmp_path / "winner"
+    public = models_root / "layacrime-public"
     for relative_path in (
         "rl_agent_config.json",
         "model.safetensors",
@@ -397,35 +397,35 @@ def test_selected_winner_has_canonical_model_option(tmp_path) -> None:
         "tokenizer/tokenizer.json",
         "tokenizer/tokenizer_config.json",
     ):
-        path = winner / relative_path
+        path = public / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
 
-    from laya_adverse_media.app import _model_paths
-
     predictor = type("Predictor", (), {"models": {
-        name: str(path) for name, path in _model_paths(models_root, winner).items()
+        name: str(path) for name, path in _fine_tuned_model_paths(models_root).items()
     }})()
-    option = _model_options(predictor)[0]
+    options = _model_options(predictor)
 
-    assert option["id"] == "crime-layacrime-v0"
-    assert option["label"] == "LayaCrime.v0 · Full-rate winner"
-    assert option["deletable"] is False
+    assert options[0]["id"] == "crime-layacrime-public"
+    assert options[0]["label"] == "LayaCrime.v0"
+    assert options[0]["deletable"] is False
+    assert not any("winner" in option["label"].casefold() for option in options)
 
 
-def test_selected_winner_remains_installable_when_checkpoint_is_missing() -> None:
+def test_public_checkpoint_remains_installable_when_missing() -> None:
     predictor = type("Predictor", (), {"models": {}})()
 
     option = _model_options(predictor)[0]
 
-    assert option["id"] == "crime-layacrime-v0"
+    assert option["id"] == "crime-layacrime-public"
+    assert option["label"] == "LayaCrime.v0"
     assert option["provider"] == "huggingface"
     assert option["repo_id"] == "leloss/LayaCrime-v0"
     assert option["installed"] is False
     assert option["installable"] is True
 
 
-def test_selected_winner_install_downloads_validated_snapshot(
+def test_public_checkpoint_install_downloads_validated_snapshot(
     tmp_path, monkeypatch
 ) -> None:
     captured = {}
@@ -448,15 +448,60 @@ def test_selected_winner_install_downloads_validated_snapshot(
     with TestClient(create_app(FakePredictor)) as client:
         response = client.post(
             "/v1/benchmark/models/install",
-            json={"model_id": "crime-layacrime-v0"},
+            json={"model_id": "crime-layacrime-public"},
         )
 
     assert response.status_code == 200, response.text
-    assert captured["model_id"] == "crime-layacrime-v0"
+    assert captured["model_id"] == "crime-layacrime-public"
     assert "download_huggingface_snapshot.py" in " ".join(captured["command"])
     assert "leloss/LayaCrime-v0" in captured["command"]
     assert captured["command"].count("--required-file") == 5
-    assert captured["models_dir"] == tmp_path / "fine-tuned" / "layacrime-v0"
+    assert captured["models_dir"] == tmp_path / "fine-tuned" / "layacrime-public"
+
+
+class _ActiveLanguageModel:
+    active_model = "gpt-5-6-luna"
+    is_healthy = True
+
+    def predict(self, article, entity_name):
+        return {
+            "answers": {"criminal_association": {
+                "choice": "A", "confidence": 1.0,
+                "probabilities": {"A": 1.0, "B": 0.0},
+            }},
+            "routing": {"model": self.active_model, "provider": "azure"},
+        }
+
+    def close(self):
+        pass
+
+
+def test_individual_test_runs_the_active_language_model() -> None:
+    app = create_app(FakePredictor)
+    with TestClient(app) as client:
+        app.state.generative_runtime = _ActiveLanguageModel()
+        app.state.benchmark_active_model = "gpt-5-6-luna"
+        response = client.post("/v1/adverse-media", json={
+            "entity_name": "Acme Corp",
+            "article": "Authorities charged Acme Corp with fraud.",
+            "model_id": "gpt-5-6-luna",
+        })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["decision"] == "negative"
+    assert response.json()["routing"]["provider"] == "azure"
+
+
+def test_individual_test_requires_language_model_activation() -> None:
+    with TestClient(create_app(FakePredictor)) as client:
+        response = client.post("/v1/adverse-media", json={
+            "entity_name": "Acme Corp",
+            "article": "Authorities charged Acme Corp with fraud.",
+            "model_id": "gpt-5-6-luna",
+        })
+
+    assert response.status_code == 409
+    assert "activate the selected model" in response.json()["detail"]
 
 
 def test_academic_model_is_selectable_for_individual_and_benchmark_use() -> None:
@@ -939,12 +984,8 @@ def test_workbench_and_assets_are_served() -> None:
     defaults = fine_tuning_status.json()["defaults"]
     assert defaults["default_training_strategy"] == "balanced"
     presets = {item["id"]: item for item in defaults["dataset_presets"]}
-    relational_1000 = presets["adverse-media-relational-2000-relational-1000"]
-    relational_2000 = presets["adverse-media-relational-2000-relational-2000"]
     public_2000 = presets["adverse-media-public-tuning-2000-human-full"]
-    assert relational_1000["corpus"].endswith("adverse-media-relational-2000\\corpus.jsonl")
-    assert relational_1000["samples"] == 1000
-    assert relational_2000["samples"] == 2000
+    assert not any("consensus" in preset_id for preset_id in presets)
     assert public_2000["samples"] == 2000
     assert public_2000["recommended_strategy"] == "public_natural_staged"
     assert [item["id"] for item in defaults["training_strategies"]] == [

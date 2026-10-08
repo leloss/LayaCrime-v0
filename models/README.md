@@ -3,7 +3,7 @@
 No model weights are distributed in this Git repository.
 
 - [Laya](https://huggingface.co/convaiinnovations/laya) is downloaded as an ignored Hugging Face cache under `models/models--convaiinnovations--laya/`. Preserve its `refs/`, `snapshots/`, and content-addressed cache directories together.
-- [LayaCrime.v0](https://huggingface.co/leloss/layacrime) is the public binary CSA checkpoint downloaded into the ignored `models/fine-tuned/layacrime-public/` directory. Additional user-defined exports remain part of the broader LayaCrime platform.
+- [LayaCrime.v0](https://huggingface.co/leloss/LayaCrime-v0) is the public binary CSA checkpoint downloaded into the ignored `models/fine-tuned/layacrime-public/` directory. Additional user-defined exports remain part of the broader LayaCrime platform.
 
 Run `scripts/setup.ps1` on Windows or `scripts/setup_environment.sh` on Linux to acquire both repositories. Set `HF_TOKEN` only when access to a configured repository requires authentication.
 

@@ -2,6 +2,8 @@
 
 LayaCrime is an open-source workbench for **Criminal Sentiment Analysis** with [Laya](https://github.com/NandhaKishorM/laya). The platform lets users define categories and prompts, import reviewed annotation sets, benchmark decision and language models, and fine-tune their own LayaCrime checkpoints.
 
+![Benchmark Console running on the public 1,000-article holdout](docs/assets/laya-crime-v0-benchmarking.gif)
+
 This repository's public checkpoint and datasets form **LayaCrime.v0**: the smallest reproducible CSA release, limited to the foundational binary decision of adverse criminal association versus no such association. Version zero is a reference implementation and starting point, not the limit of the platform's taxonomy.
 
 Given one article and one named entity, the task produces one of two decisions:
@@ -17,7 +19,7 @@ The server exposes three connected workflows:
 
 | Workflow | URL | Purpose |
 | --- | --- | --- |
-| Individual Test | `/` | Inspect one article, confidence, probabilities, routing, and review status. |
+| Individual Test | `/` | Classify one article with any decision model, academic baseline, cloud LLM, or local GGUF model. |
 | Benchmark | `/benchmark` | Compare Laya checkpoints, hosted models, and local GGUF models on one labeled corpus. |
 | Fine-Tuning | `/fine-tuning` | Prepare reviewed labels, train Laya, inspect reports, and optionally publish an export to Hugging Face. |
 
@@ -42,9 +44,18 @@ The article manuscript, its build files, and generated PDFs are deliberately exc
 
 The entire `third_party/` directory is also ignored and is not published to GitHub. Setup recreates it from pinned upstream sources: Laya v0.3.10 is cloned into `third_party/laya`, and the Ubuntu setup clones and builds the tested llama.cpp revision under `third_party/llama.cpp`. Local checkouts and native build products therefore remain reproducible installation state rather than repository contents.
 
-## Deploy on an Ubuntu 22.04 GPU host
+## Deploy on Linux, WSL, or macOS
 
-The supported full setup targets Ubuntu 22.04 with an NVIDIA GPU, Python 3.10-3.13, and a working NVIDIA driver version 525 or newer. The default llama.cpp build targets CUDA architecture 75, used by the Tesla T4.
+The reference setup is Ubuntu 22.04 with an NVIDIA Tesla T4, Python 3.10-3.13, and an NVIDIA driver version 525 or newer. The same scripts also run on Ubuntu 24.04, Debian, WSL2, other NVIDIA GPUs, CPU-only hosts, and macOS, and adapt to what each host provides:
+
+| Host | PyTorch | llama.cpp (local GGUF models) | Fine-tuning |
+| --- | --- | --- | --- |
+| NVIDIA driver 525+ and a CUDA 12 toolkit (installed automatically on Ubuntu, Debian, and WSL) | CUDA build | CUDA build for the detected GPU architecture | Yes |
+| NVIDIA GPU, but no usable CUDA toolkit | CUDA build | CPU build | Yes |
+| No NVIDIA GPU, or a driver older than 525 | CPU build | CPU build | No |
+| macOS | Default build (CPU and Apple MPS) | Metal build | No |
+
+Laya inference, benchmarks, and dataset work run on any of these hosts.
 
 From the repository root:
 
@@ -55,13 +66,15 @@ From the repository root:
 
 `setup_environment.sh` performs the complete host setup:
 
-1. Installs Ubuntu build prerequisites with `sudo` when needed.
-2. Creates an isolated Python environment under `~/.cache/laya-adverse-media/venv`.
-3. Selects and installs a PyTorch CUDA build compatible with the installed driver.
-4. Installs a compatible CUDA 12 toolkit without replacing the driver. CUDA 11 is rejected because current llama.cpp releases require a newer compiler toolchain.
-5. Builds llama.cpp and runs a real CUDA initialization probe.
+1. Installs Debian/Ubuntu build prerequisites with `sudo` when needed.
+2. Creates an isolated Python environment under `~/.cache/laya-adverse-media/venv`, using the first Python 3.10-3.13 it finds (override with `PYTHON_BIN`).
+3. Installs a PyTorch CUDA build compatible with the installed driver, or the CPU build when no usable NVIDIA driver exists (override with `TORCH_INDEX_URL`).
+4. Installs a compatible CUDA 12 toolkit without replacing the driver, from NVIDIA's repository for the host (WSL-Ubuntu, Ubuntu 22.04/24.04, or Debian). CUDA 11 is rejected because current llama.cpp releases require a newer compiler toolchain.
+5. Builds llama.cpp for the detected GPU architecture and runs a real CUDA initialization probe. If CUDA is not usable, it builds for CPU instead. If llama.cpp cannot be built at all, setup still finishes, and local GGUF models stay unavailable until `./scripts/setup_llama_cpp.sh` succeeds.
 6. Downloads Laya and LayaCrime from Hugging Face into ignored model directories.
-7. Verifies that PyTorch can see the GPU.
+7. Reports which devices PyTorch can use.
+
+Useful overrides: `LAYA_LLAMA_BACKEND=cuda` fails instead of falling back to CPU, `LAYA_LLAMA_BACKEND=cpu` skips CUDA entirely, `CUDA_ARCHITECTURES=75` pins the GPU architecture, and `LAYA_SETUP_LLAMA_CPP=false` skips llama.cpp. On WSL, cloning the repository inside the Linux filesystem (for example `~/LayaCrime-v0`) rather than under `/mnt/c` makes builds and model loading much faster.
 
 The launcher binds to `127.0.0.1:8000` by default. Open:
 
@@ -71,7 +84,7 @@ http://127.0.0.1:8000/benchmark
 http://127.0.0.1:8000/fine-tuning
 ```
 
-Setup does not install or replace the NVIDIA driver. On managed hosts, set `LAYA_AUTO_INSTALL_SYSTEM_DEPS=false` and provision the required system packages separately. To provision or repair only the local language-model runtime, run `./scripts/setup_llama_cpp.sh`. It adopts an existing pre-stamp build when its source revision, CMake cache, CUDA architecture, and device enumeration are valid; otherwise it exits immediately for an already verified runtime, resumes a compatible interrupted build incrementally, and cleans the build directory only when its revision, CUDA compiler, architecture, or CUDA configuration changed.
+Setup does not install or replace the NVIDIA driver. On managed hosts, set `LAYA_AUTO_INSTALL_SYSTEM_DEPS=false` and provision the required system packages separately. To provision or repair only the local language-model runtime, run `./scripts/setup_llama_cpp.sh`. It adopts an existing pre-stamp build when its source revision, CMake cache, CUDA architecture, and device enumeration are valid; otherwise it exits immediately for an already verified runtime, resumes a compatible interrupted build incrementally, and cleans the build directory only when its revision, backend, CUDA compiler, or architecture changed. On a host with an NVIDIA GPU, a CPU fallback build is rechecked on each run so it is upgraded to CUDA once a toolkit is available.
 
 ## Set up on Windows
 
@@ -87,7 +100,7 @@ The script creates `../.venv-laya`, clones the pinned Laya source under `third_p
 
 ## Classify one article
 
-The Individual Test screen is the fastest way to inspect behavior. Choose a decision model, provide the entity and article, and review the decision, probability distribution, routing information, and review flag.
+The Individual Test screen is the fastest way to inspect behavior. It offers the same model list as the Benchmark Console: Laya, LayaCrime.v0 and your own fine-tuned checkpoints, the academic baselines, cloud LLMs, and self-hosted GGUF models. Missing GGUF models and the LayaCrime.v0 checkpoint can be installed from the list, and cloud models ask for an endpoint and key. Provide the entity and article, then review the decision, probability distribution, routing information, and review flag. Language models return a discrete decision and use the fixed benchmark instruction rather than the editable prompt.
 
 The same operation is available through the API:
 
@@ -118,7 +131,7 @@ The Benchmark Console keeps task-specific classifiers and general-purpose langua
 - **Decision Models** contains the Laya router, the published LayaCrime.v0 checkpoint, and compatible local fine-tuned exports.
 - **Language Models** contains configured Azure deployments and installable local GGUF models served by llama.cpp.
 
-The bundled language-model catalog includes Azure deployments for GPT, Grok, and DeepSeek models alongside Qwen3 8B/14B, Qwen3.8 27B, Qwen3.6 and Qwen3.5 35B-A3B, Ternary Bonsai 27B, Gemma 4 E4B/12B, two gpt-oss 20B quantizations, DeepSeek-R1-Distill-Qwen 14B, Mistral Small 3.2 24B, Devstral Small 2 24B, and Ministral 3 14B reasoning/instruct configurations. The dropdown separates cloud LLMs from self-hosted LLMs; each section ends with its corresponding add action. A custom cloud connection requests a model name, API endpoint, and API key without persisting the credentials. Selecting an unavailable GGUF model opens an installation monitor. Repository and file fields remain editable before download. The catalog uses single-file GGUF artifacts verified against Hugging Face metadata; models larger than T4 VRAM rely on llama.cpp's automatic layer offload to CPU memory. A model is not marked ready until its download receipt, GGUF signature, llama.cpp CUDA device, running process, and substantial VRAM allocation have all been verified.
+The bundled language-model catalog includes Azure deployments for GPT, Grok, and DeepSeek models alongside Qwen3 8B/14B, Qwen3.8 27B, Qwen3.6 and Qwen3.5 35B-A3B, Ternary Bonsai 27B, Gemma 4 E4B/12B, two gpt-oss 20B quantizations, DeepSeek-R1-Distill-Qwen 14B, Mistral Small 3.2 24B, Devstral Small 2 24B, and Ministral 3 14B reasoning/instruct configurations. The dropdown separates cloud LLMs from self-hosted LLMs; each section ends with its corresponding add action. A custom cloud connection requests a model name, API endpoint, and API key without persisting the credentials. Selecting an unavailable GGUF model opens an installation monitor. Repository and file fields remain editable before download. The catalog uses single-file GGUF artifacts verified against Hugging Face metadata; models larger than T4 VRAM rely on llama.cpp's automatic layer offload to CPU memory. A model is not marked ready until its download receipt, GGUF signature, and running process have been verified; with a CUDA build of llama.cpp, the CUDA device and a substantial VRAM allocation are verified as well. CPU builds run the same models more slowly.
 
 The project pins a tested llama.cpp revision rather than tracking its moving `master` branch. llama.cpp remains the local runtime because it directly supports the catalog's GGUF files, structured OpenAI-compatible responses, and efficient T4 offload. Ollama and llama-cpp-python use the same underlying inference implementation, while replacing it with vLLM would require a different model-distribution and memory contract. Override `LLAMA_CPP_REVISION` only when deliberately qualifying a newer revision.
 
@@ -137,7 +150,13 @@ The selected model receives only the article, entity name, question, and criteri
 
 ## Reproduce the academic comparisons
 
-The release includes separate command-line implementations and tests for every academic comparison. Generated predictions and reports go under ignored `artifacts/` directories. Install the local reimplementation and Tartu dependencies with:
+The release includes separate command-line implementations and tests for every academic comparison, and the three baselines are also selectable in Individual Test and Benchmark. `setup_environment.sh` installs them; to install or repair them on their own, run:
+
+```bash
+./scripts/setup_academic_models.sh
+```
+
+It installs scikit-learn, spaCy, and `en_core_web_sm` into the main environment, fetches the pinned Tartu training archives into `third_party/ut-ml-adverse-media`, and builds the isolated NewsMTSC environment. If NewsMTSC fails, the other two baselines remain available. Generated predictions and reports go under ignored `artifacts/` directories. To install the Khandpur and Tartu dependencies by hand instead:
 
 ```bash
 python -m pip install --editable ".[academic]"
@@ -167,7 +186,7 @@ python scripts/benchmark_tartu_baseline.py \
   --output-root artifacts/academic-baselines
 ```
 
-NewsMTSC requires its own Python 3.10 environment because the pinned upstream package requires Python below 3.12, Transformers 4.17--4.24, and PyTorch below 2.1. Clone the exact tested source revision and install it in that environment:
+NewsMTSC requires its own Python 3.8-3.11 environment because the pinned upstream package requires Python below 3.12, Transformers 4.17--4.24, and PyTorch below 2.1. The setup script clones the exact tested source revision, uses `python3.11` (or another compatible interpreter) when one is installed, and otherwise provisions CPython 3.11 with `uv`. It also downloads the GRU-TSC checkpoint once, because the application runs offline:
 
 ```bash
 ./scripts/setup_newsmtsc_environment.sh
@@ -191,7 +210,7 @@ The release contains two natural, non-synthetic bundles:
 | `adverse-media-public-tuning-2000` | Training and model selection | 2,000 | 1,000 positive / 1,000 negative |
 | `adverse-media-public-holdout-1000` | Final independent evaluation only | 1,000 | 557 positive / 443 negative |
 
-Both are human annotated, limit repeated entities, and contain original entity/article pairs without synthetic substitutions. The two bundles have zero article-ID overlap and zero normalized-article overlap.
+Both ship only their human annotation set (`annotations/human.jsonl`), limit repeated entities, and contain original entity/article pairs without synthetic substitutions. The two bundles have zero article-ID overlap and zero normalized-article overlap.
 
 Do not use the public holdout for prompt editing, strategy selection, checkpoint selection, calibration, or threshold tuning. Use the 2,000-row tuning bundle for those choices, then evaluate the frozen model and settings on the holdout.
 

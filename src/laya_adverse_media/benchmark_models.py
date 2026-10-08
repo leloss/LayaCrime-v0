@@ -471,21 +471,33 @@ def local_model_installation(model_path: Path) -> tuple[bool, str, str | None]:
     return True, "ready", None
 
 
+def project_llama_runtime_backend(build_root: Path) -> str | None:
+    """Return the verified backend of the project llama.cpp build, if any.
+
+    setup_llama_cpp.sh writes ``backend=cuda|cpu|metal`` into the runtime stamp
+    after a successful device probe. Stamps written before that line existed
+    describe CUDA builds.
+    """
+    cache = build_root / "CMakeCache.txt"
+    runtime_stamp = build_root / "laya-cuda-runtime.ok"
+    if not runtime_stamp.is_file() or not cache.is_file():
+        return None
+    stamp = runtime_stamp.read_text(encoding="utf-8", errors="replace")
+    match = re.search(r"^backend=(\w+)$", stamp, re.MULTILINE)
+    backend = match.group(1) if match else "cuda"
+    cuda_enabled = "GGML_CUDA:BOOL=ON" in cache.read_text(encoding="utf-8", errors="replace")
+    if backend == "cuda" and not cuda_enabled:
+        return None
+    return backend
+
+
 def resolve_llama_server(configured: str | None = None) -> str | None:
     explicit = configured or os.getenv("LAYA_LLAMA_SERVER")
     if explicit:
         return str(Path(explicit).resolve()) if Path(explicit).is_file() else None
 
     build_root = Path(__file__).resolve().parents[2] / "third_party" / "llama.cpp" / "build"
-    cache = build_root / "CMakeCache.txt"
-    runtime_stamp = build_root / "laya-cuda-runtime.ok"
-    if (
-        not runtime_stamp.is_file()
-        or not cache.is_file()
-        or "GGML_CUDA:BOOL=ON" not in cache.read_text(
-            encoding="utf-8", errors="replace"
-        )
-    ):
+    if project_llama_runtime_backend(build_root) is None:
         return None
     candidates = [
         build_root / "bin" / "llama-server",

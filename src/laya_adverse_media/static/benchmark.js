@@ -122,7 +122,7 @@ function renderInstallation(data) {
   $("#install-percent").textContent = progress === null ? "Working..." : `${(progress * 100).toFixed(1)}%`;
   $("#install-progress-bar").className = progress === null && data.status === "running" ? "indeterminate" : "";
   $("#install-progress-bar").style.width = progress === null ? "" : `${progress * 100}%`;
-  $("#install-bytes").textContent = data.total_bytes ? `${formatBytes(data.downloaded_bytes)} of ${formatBytes(data.total_bytes)}` : data.phase === "building runtime" ? "Compiling CUDA llama.cpp runtime" : "Preparing installation";
+  $("#install-bytes").textContent = data.total_bytes ? `${formatBytes(data.downloaded_bytes)} of ${formatBytes(data.total_bytes)}` : data.phase === "building runtime" ? "Compiling llama.cpp runtime" : "Preparing installation";
   if (data.logs?.length) { if ($("#install-log").textContent.startsWith("Waiting for")) $("#install-log").textContent = ""; data.logs.forEach(row => { $("#install-log").textContent += `${row.message}\n`; installLogIndex = Math.max(installLogIndex, row.index); }); $("#install-log").scrollTop = $("#install-log").scrollHeight; }
   if (data.status === "failed") { $("#install-error").textContent = data.error || "Installation failed"; $("#install-error").hidden = false; }
 }
@@ -408,7 +408,7 @@ async function loadModels(selectedId = null) {
   const groups = groupSpecs.map(([label, includes, action]) => {
     const group = document.createElement("optgroup"); group.label = label;
     const models = data.models.filter(includes);
-    models.forEach(model => group.append(new Option(`${model.label}${model.installable && !model.installed ? model.installation_state === "missing" ? " · install required" : " · repair required" : ""}`, model.id)));
+    models.forEach(model => group.append(new Option(`${model.label}${model.installable && !model.installed ? model.installation_state === "missing" ? " · install required" : " · repair required" : !model.installable && model.runtime_available === false ? " · setup required" : ""}`, model.id)));
     if (!models.length && !action) { const unavailable = new Option(`${label} unavailable`, `__${label.toLowerCase().replaceAll(" ", "-")}-unavailable`); unavailable.disabled = true; group.append(unavailable); }
     if (action) group.append(action);
     return group;

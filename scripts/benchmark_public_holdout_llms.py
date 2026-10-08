@@ -459,7 +459,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gold",
         type=Path,
-        default=Path("datasets/adverse-media-public-holdout-1000/annotations/consensus.jsonl"),
+        default=Path("datasets/adverse-media-public-holdout-1000/annotations/human.jsonl"),
     )
     parser.add_argument(
         "--output-root",

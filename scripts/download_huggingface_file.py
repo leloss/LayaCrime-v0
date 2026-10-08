@@ -160,23 +160,24 @@ def main() -> int:
         )
         cmake_cache = project_runtime.parents[1] / "CMakeCache.txt"
         runtime_stamp = project_runtime.parents[1] / "laya-cuda-runtime.ok"
-        project_cuda_enabled = (
-            project_runtime.is_file()
-            and runtime_stamp.is_file()
-            and cmake_cache.is_file()
-            and "GGML_CUDA:BOOL=ON" in cmake_cache.read_text(
-                encoding="utf-8", errors="replace"
+        project_runtime_verified = False
+        if project_runtime.is_file() and runtime_stamp.is_file() and cmake_cache.is_file():
+            stamp = runtime_stamp.read_text(encoding="utf-8", errors="replace")
+            # Stamps without a backend line predate CPU/Metal builds and describe CUDA.
+            cuda_build = "backend=" not in stamp or "backend=cuda" in stamp.splitlines()
+            project_runtime_verified = not cuda_build or (
+                "GGML_CUDA:BOOL=ON"
+                in cmake_cache.read_text(encoding="utf-8", errors="replace")
             )
-        )
         runtime = (
             configured_runtime
             if configured_runtime and Path(configured_runtime).is_file()
-            else str(project_runtime) if project_cuda_enabled else None
+            else str(project_runtime) if project_runtime_verified else None
         )
         if runtime is None:
             if os.name == "nt":
                 raise RuntimeError(
-                    "llama-server is missing. Build it on the Linux GPU host with "
+                    "llama-server is missing. Build it on a Linux or macOS host with "
                     "scripts/setup_llama_cpp.sh"
                 )
             print("phase=building_runtime", flush=True)
@@ -187,9 +188,9 @@ def main() -> int:
             )
             runtime = str(project_runtime)
         if not Path(runtime).is_file():
-            raise RuntimeError(f"CUDA llama-server was not produced at {runtime}")
+            raise RuntimeError(f"llama-server was not produced at {runtime}")
         if runtime == str(project_runtime) and not runtime_stamp.is_file():
-            raise RuntimeError("CUDA llama-server did not pass its initialization probe")
+            raise RuntimeError("llama-server did not pass its device initialization probe")
 
         print("phase=downloading_gguf", flush=True)
 

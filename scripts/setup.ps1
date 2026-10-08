@@ -10,7 +10,7 @@ $Python = Join-Path $VenvDir "Scripts\python.exe"
 $LayaSource = Join-Path $ProjectRoot "third_party\laya"
 $LayaRepo = if ($env:LAYA_HF_REPO_ID) { $env:LAYA_HF_REPO_ID } else { "convaiinnovations/laya" }
 $LayaRevision = if ($env:LAYA_HF_REVISION) { $env:LAYA_HF_REVISION } else { "main" }
-$LayaCrimeRepo = if ($env:LAYACRIME_HF_REPO_ID) { $env:LAYACRIME_HF_REPO_ID } else { "leloss/layacrime" }
+$LayaCrimeRepo = if ($env:LAYACRIME_HF_REPO_ID) { $env:LAYACRIME_HF_REPO_ID } else { "leloss/LayaCrime-v0" }
 $LayaCrimeRevision = if ($env:LAYACRIME_HF_REVISION) { $env:LAYACRIME_HF_REVISION } else { "main" }
 $SnapshotDownloader = Join-Path $PSScriptRoot "download_huggingface_snapshot.py"
 

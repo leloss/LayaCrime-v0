@@ -86,6 +86,9 @@ datasets/*
 !datasets/adverse-media-public-tuning-2000/**
 !datasets/adverse-media-public-holdout-1000/
 !datasets/adverse-media-public-holdout-1000/**
+# Only human annotations are public; consensus labels and training subsets stay local.
+datasets/*/annotations/consensus.jsonl
+datasets/*/training-subsets/
 docs/assets/crime-laya-[234].png
 docs/assets/*benchmark.png
 # Manuscript sources and generated article files are maintained outside the public release.

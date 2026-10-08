@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -12,12 +13,10 @@ PUBLIC_DATASETS = {
 REQUIRED_RELEASE_FILES = {
     "datasets/README.md",
     "datasets/adverse-media-public-tuning-2000/README.md",
-    "datasets/adverse-media-public-tuning-2000/annotations/consensus.jsonl",
     "datasets/adverse-media-public-tuning-2000/annotations/human.jsonl",
     "datasets/adverse-media-public-tuning-2000/corpus.jsonl",
     "datasets/adverse-media-public-tuning-2000/dataset.json",
     "datasets/adverse-media-public-holdout-1000/README.md",
-    "datasets/adverse-media-public-holdout-1000/annotations/consensus.jsonl",
     "datasets/adverse-media-public-holdout-1000/annotations/human.jsonl",
     "datasets/adverse-media-public-holdout-1000/corpus.jsonl",
     "datasets/adverse-media-public-holdout-1000/dataset.json",
@@ -83,6 +82,8 @@ def violation(path: Path) -> str | None:
     if parts[0] == "datasets" and len(parts) > 1:
         if parts[1] != "README.md" and parts[1] not in PUBLIC_DATASETS:
             return "only public tuning and holdout datasets may ship"
+        if "training-subsets" in parts or path.stem.casefold() == "consensus":
+            return "only human annotations ship; consensus labels and training subsets are private"
     if path.suffix.casefold() in MODEL_SUFFIXES:
         return "model weight files must not ship in the repository"
     return None
@@ -122,6 +123,36 @@ def main() -> int:
                 "public release terms are not cleared"
             )
             return 1
+        declared_files = [("corpus", manifest.get("corpus") or {})] + [
+            (f"annotations[{index}]", row)
+            for index, row in enumerate(manifest.get("annotations") or [])
+        ]
+        for field, entry in declared_files:
+            declared = entry.get("sha256")
+            data_path = manifest_path.parent / str(entry.get("path", ""))
+            if declared is None or not data_path.is_file():
+                continue
+            if hashlib.sha256(data_path.read_bytes()).hexdigest() != declared:
+                print(
+                    f"ERROR {manifest_path.relative_to(ROOT).as_posix()}: "
+                    f"{field} checksum does not match {data_path.relative_to(ROOT).as_posix()}"
+                )
+                return 1
+
+    staged_modes = subprocess.run(
+        ["git", "ls-files", "--stage", "--", "*.sh"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    non_executable = [
+        line.split("\t", 1)[1] for line in staged_modes if not line.startswith("100755")
+    ]
+    if non_executable:
+        for path in non_executable:
+            print(f"ERROR {path}: shell scripts must be executable (git update-index --chmod=+x)")
+        return 1
 
     public_files = [
         path

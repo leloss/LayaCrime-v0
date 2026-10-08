@@ -581,10 +581,12 @@ class _SelectablePredictor:
         with self._lock:
             if selected == self._active_model:
                 return selected
-            academic_ids = {
-                option["id"] for option in self._academic_runtime.options()
-            } if self._academic_runtime is not None else set()
-            if selected in academic_ids:
+            academic_options = {
+                option["id"]: option for option in self._academic_runtime.options()
+            } if self._academic_runtime is not None else {}
+            if selected in academic_options:
+                if not academic_options[selected]["runtime_available"]:
+                    raise RuntimeError(academic_options[selected]["availability_error"])
                 self._router.unload()
                 self._release_fine_tuned()
                 self._active_model = "loading"
@@ -662,30 +664,19 @@ def _fine_tuned_model_paths(models_root: Path) -> dict[str, Path]:
     }
 
 
-SELECTED_WINNER_ID = "crime-layacrime-v0"
-SELECTED_WINNER_HF_REPO_ID = "leloss/LayaCrime-v0"
-SELECTED_WINNER_HF_REVISION = "main"
-SELECTED_WINNER_DIRECTORY = "layacrime-v0"
+# The published LayaCrime.v0 checkpoint. Setup downloads it into this directory,
+# and the model selectors offer to install it there when it is missing.
+PUBLIC_MODEL_DIRECTORY = "layacrime-public"
+PUBLIC_MODEL_ID = f"crime-{PUBLIC_MODEL_DIRECTORY}"
+PUBLIC_MODEL_LABEL = "LayaCrime.v0"
+PUBLIC_MODEL_HF_REPO_ID = "leloss/LayaCrime-v0"
+PUBLIC_MODEL_HF_REVISION = "main"
 
 
-def _selected_winner_model_path(project_root: Path) -> Path:
-    return Path(
-        os.getenv(
-            "LAYA_SELECTED_MODEL_DIR",
-            project_root
-            / "artifacts"
-            / "public-experiment-matrix"
-            / "models"
-            / "holdout_80_20__maximum_task_adaptation__seed-20260923",
-        )
-    ).expanduser().resolve()
-
-
-def _model_paths(models_root: Path, selected_winner: Path) -> dict[str, Path]:
-    models = _fine_tuned_model_paths(models_root)
-    if all((selected_winner / required).is_file() for required in REQUIRED_MODEL_FILES):
-        models[SELECTED_WINNER_ID] = selected_winner
-    return models
+def _fine_tuned_model_label(model_id: str) -> str:
+    if model_id == PUBLIC_MODEL_ID:
+        return PUBLIC_MODEL_LABEL
+    return f"LayaCrime · {model_id.removeprefix('crime-').replace('-', ' ').title()}"
 
 
 def _checkpoint_modified_at(path: Path) -> int:
@@ -699,18 +690,11 @@ def _checkpoint_modified_at(path: Path) -> int:
         return 0
 
 
-def _refresh_fine_tuned_models(
-    predictor: Predictor, models_root: Path, selected_winner: Path | None = None
-) -> None:
+def _refresh_fine_tuned_models(predictor: Predictor, models_root: Path) -> None:
     configured = getattr(predictor, "models", None)
     if not isinstance(configured, dict):
         return
     discovered = _fine_tuned_model_paths(models_root)
-    winner = selected_winner or configured.get(SELECTED_WINNER_ID)
-    if winner is not None:
-        winner_path = Path(str(winner))
-        if all((winner_path / required).is_file() for required in REQUIRED_MODEL_FILES):
-            discovered[SELECTED_WINNER_ID] = winner_path
     def refresh() -> None:
         for name in list(configured):
             if name.startswith("crime-") and name not in discovered:
@@ -761,9 +745,7 @@ def _build_predictor() -> Predictor:
             project_root / "models" / "fine-tuned",
         )
     ).expanduser().resolve()
-    fine_tuned_models = _model_paths(
-        fine_tuned_root, _selected_winner_model_path(project_root)
-    )
+    fine_tuned_models = _fine_tuned_model_paths(fine_tuned_root)
     missing = [
         f"{name}: {path / required}"
         for name, path in model_paths.items()
@@ -818,35 +800,25 @@ def _model_options(predictor: Predictor) -> list[dict[str, Any]]:
     decision_models = [
         {
             "id": name,
-            "label": (
-                "LayaCrime.v0 · Full-rate winner"
-                if name == SELECTED_WINNER_ID
-                else f"LayaCrime · {name.removeprefix('crime-').replace('-', ' ').title()}"
-            ),
+            "label": _fine_tuned_model_label(name),
             "family": "fine-tuned",
             "category": "decision",
-            "deletable": name != SELECTED_WINNER_ID,
-            "provider": "huggingface" if name == SELECTED_WINNER_ID else "local",
+            "deletable": name != PUBLIC_MODEL_ID,
+            "provider": "huggingface" if name == PUBLIC_MODEL_ID else "local",
             "installed": True,
             "runtime_available": True,
-            "installable": name == SELECTED_WINNER_ID,
-            "repo_id": (
-                SELECTED_WINNER_HF_REPO_ID
-                if name == SELECTED_WINNER_ID else None
-            ),
-            "revision": (
-                SELECTED_WINNER_HF_REVISION
-                if name == SELECTED_WINNER_ID else None
-            ),
+            "installable": name == PUBLIC_MODEL_ID,
+            "repo_id": PUBLIC_MODEL_HF_REPO_ID if name == PUBLIC_MODEL_ID else None,
+            "revision": PUBLIC_MODEL_HF_REVISION if name == PUBLIC_MODEL_ID else None,
             "installation_state": "installed",
             "prompt": _model_prompt(predictor, name),
         }
         for name in fine_tuned
     ]
-    if SELECTED_WINNER_ID not in configured:
+    if PUBLIC_MODEL_ID not in configured:
         decision_models.insert(0, {
-            "id": SELECTED_WINNER_ID,
-            "label": "LayaCrime.v0 · Full-rate winner",
+            "id": PUBLIC_MODEL_ID,
+            "label": PUBLIC_MODEL_LABEL,
             "family": "fine-tuned",
             "category": "decision",
             "deletable": False,
@@ -854,10 +826,10 @@ def _model_options(predictor: Predictor) -> list[dict[str, Any]]:
             "installed": False,
             "runtime_available": False,
             "installable": True,
-            "repo_id": SELECTED_WINNER_HF_REPO_ID,
-            "revision": SELECTED_WINNER_HF_REVISION,
+            "repo_id": PUBLIC_MODEL_HF_REPO_ID,
+            "revision": PUBLIC_MODEL_HF_REVISION,
             "installation_state": "missing",
-            "availability_error": "LayaCrime.v0 checkpoint is not installed",
+            "availability_error": f"{PUBLIC_MODEL_LABEL} checkpoint is not installed",
             "prompt": validate_prompt(None),
         })
     decision_models.append({
@@ -1160,7 +1132,6 @@ def create_app(
             "LAYA_FINE_TUNED_MODELS_DIR", project_root / "models" / "fine-tuned"
         )
     ).expanduser().resolve()
-    selected_winner_model = _selected_winner_model_path(project_root)
     model_bundle = project_root / "models" / "models--convaiinnovations--laya"
     model_revision = (
         (model_bundle / "refs" / "main").read_text(encoding="utf-8").strip()
@@ -1177,9 +1148,9 @@ def create_app(
         return [
             {
                 "id": model_id,
-                "label": f"LayaCrime · {model_id.removeprefix('crime-').replace('-', ' ').title()}",
+                "label": _fine_tuned_model_label(model_id),
                 "path": str(path),
-                "deletable": True,
+                "deletable": model_id != PUBLIC_MODEL_ID,
             }
             for model_id, path in _fine_tuned_model_paths(fine_tuned_models_root).items()
         ] + [{
@@ -1637,9 +1608,7 @@ def create_app(
         predictor = resolve_predictor(request, wait=0.05)
         laya_models: list[dict[str, Any]] = []
         if predictor is not None:
-            _refresh_fine_tuned_models(
-                predictor, fine_tuned_models_root, selected_winner_model
-            )
+            _refresh_fine_tuned_models(predictor, fine_tuned_models_root)
             laya_models = _model_options(predictor)
         gguf_root = gguf_models_root()
         generative_models = benchmark_model_options(gguf_root)
@@ -1784,7 +1753,7 @@ def create_app(
                 model_path = _fine_tuned_model_paths(fine_tuned_models_root).get(
                     payload.model_id
                 )
-                if model_path is None:
+                if model_path is None or payload.model_id == PUBLIC_MODEL_ID:
                     raise HTTPException(status_code=404, detail="deletable model not found")
                 shutil.rmtree(model_path)
                 if predictor is not None:
@@ -1805,16 +1774,16 @@ def create_app(
         )
         environment = os.environ.copy()
         environment.pop("HF_HUB_OFFLINE", None)
-        if payload.model_id == SELECTED_WINNER_ID:
-            target = fine_tuned_models_root / SELECTED_WINNER_DIRECTORY
+        if payload.model_id == PUBLIC_MODEL_ID:
+            target = fine_tuned_models_root / PUBLIC_MODEL_DIRECTORY
             target.mkdir(parents=True, exist_ok=True)
             command = [
                 sys.executable,
                 str(project_root / "scripts" / "download_huggingface_snapshot.py"),
                 "--repo-id",
-                SELECTED_WINNER_HF_REPO_ID,
+                PUBLIC_MODEL_HF_REPO_ID,
                 "--revision",
-                SELECTED_WINNER_HF_REVISION,
+                PUBLIC_MODEL_HF_REVISION,
                 "--local-dir",
                 str(target),
                 "--read-token-stdin",
@@ -1834,7 +1803,7 @@ def create_app(
             try:
                 request.app.state.model_installation.start(
                     command,
-                    SELECTED_WINNER_ID,
+                    PUBLIC_MODEL_ID,
                     target,
                     project_root,
                     stdin_data=json.dumps({"token": token}),
@@ -1902,6 +1871,28 @@ def create_app(
     async def adverse_media(
         payload: AdverseMediaRequest, request: Request
     ) -> AdverseMediaResponse:
+        loop = asyncio.get_running_loop()
+        generative_spec = (
+            registered_model_by_id(gguf_models_root(), payload.model_id)
+            if payload.model_id
+            else None
+        )
+        if generative_spec is not None:
+            runtime = request.app.state.generative_runtime
+            if runtime is None or runtime.active_model != payload.model_id:
+                raise HTTPException(
+                    status_code=409, detail="activate the selected model before running a test"
+                )
+            try:
+                result = await loop.run_in_executor(
+                    request.app.state.inference_pool,
+                    lambda: runtime.predict(payload.article, payload.entity_name),
+                )
+                return _parse_result(result, payload.entity_name, review_threshold)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"{generative_spec.label} request failed: {exc}"
+                ) from exc
         predictor = resolve_predictor(request)
         if predictor is None:
             warming = request.app.state.startup_error is None
@@ -1918,9 +1909,7 @@ def create_app(
             )
         loop = asyncio.get_running_loop()
         try:
-            _refresh_fine_tuned_models(
-                predictor, fine_tuned_models_root, selected_winner_model
-            )
+            _refresh_fine_tuned_models(predictor, fine_tuned_models_root)
             selected_model = (None if payload.model_id == "auto" else payload.model_id) or (
                 None if payload.routing_mode == "auto" else payload.routing_mode
             )
