@@ -1,0 +1,87 @@
+# Python environments, bytecode, and tool caches.
+.venv*/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python package and native build products.
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Logs, temporary files, and operating-system/editor metadata.
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local application state and credentials.
+data/
+logs/
+runs/
+wandb/
+nohup.out
+.env
+.env.*
+!.env.example
+*.bin
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.gguf
+*.ggml
+*.incomplete
+# Runtime downloads and all locally trained checkpoints stay out of releases.
+models/*
+!models/README.md
+third_party/
+# Predictions, prepared tensors, reports, and saved runs are always local.
+artifacts/
+# Only the three public bundles described in the paper are release candidates:
+# corpus, manifest, README, and human annotations.
+datasets/**
+!datasets/README.md
+!datasets/adverse-media-public-tuning-2000/
+!datasets/adverse-media-public-tuning-2000/README.md
+!datasets/adverse-media-public-tuning-2000/dataset.json
+!datasets/adverse-media-public-tuning-2000/corpus.jsonl
+!datasets/adverse-media-public-tuning-2000/annotations/
+!datasets/adverse-media-public-tuning-2000/annotations/human.jsonl
+!datasets/adverse-media-public-holdout-1000/
+!datasets/adverse-media-public-holdout-1000/README.md
+!datasets/adverse-media-public-holdout-1000/dataset.json
+!datasets/adverse-media-public-holdout-1000/corpus.jsonl
+!datasets/adverse-media-public-holdout-1000/annotations/
+!datasets/adverse-media-public-holdout-1000/annotations/human.jsonl
+!datasets/adverse-media-public-selection-1000/
+!datasets/adverse-media-public-selection-1000/README.md
+!datasets/adverse-media-public-selection-1000/dataset.json
+!datasets/adverse-media-public-selection-1000/corpus.jsonl
+!datasets/adverse-media-public-selection-1000/annotations/
+!datasets/adverse-media-public-selection-1000/annotations/human.jsonl
+# The manuscript is maintained outside the repository.
+paper/

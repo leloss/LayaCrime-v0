@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "id": "adverse-media-public-selection-1000",
+  "name": "Adverse Media Public Selection 1,000",
+  "description": "Article-disjoint selection set for choosing the frozen checkpoint.",
+  "purpose": "evaluation-only",
+  "release_scope": "public",
+  "license": "Apache-2.0",
+  "redistribution_status": "cleared-for-public-release",
+  "task": "adverse-media-entity-classification",
+  "prompt": {
+    "question": "How does this article portray {entity_name} regarding criminal behavior or intent? Judge only the named entity, not other people or organizations.",
+    "criteria": [
+      {
+        "decision": "negative",
+        "text": "negative: the article credibly associates the entity with alleged, investigated, charged, convicted, sanctioned, or admitted criminal behavior or intent"
+      },
+      {
+        "decision": "positive",
+        "text": "positive: the article does not associate the entity with criminal behavior or intent, or identifies the entity only as a victim, witness, investigator, or unrelated party"
+      }
+    ]
+  },
+  "corpus": {
+    "path": "corpus.jsonl",
+    "records": 1000,
+    "sha256": "c8d23fbc878a05db451100400ebd37ef58c4857d8dd44708b0948cab1054f6f1",
+    "fields": [
+      "article_id",
+      "entity_name",
+      "article"
+    ]
+  },
+  "label_schema": {
+    "1": "positive",
+    "2": "negative"
+  },
+  "annotations": [
+    {
+      "id": "human",
+      "name": "Human annotations",
+      "path": "annotations/human.jsonl",
+      "records": 1000,
+      "sha256": "c02239e4f38db73c59f3f0a9cd0f97bda3366035fba8463da230f0665d9395d5",
+      "scope": "full",
+      "label_counts": {
+        "negative": 500,
+        "positive": 500
+      }
+    }
+  ],
+  "training_subsets": [],
+  "derivation": {
+    "seed": 20261010,
+    "source_dataset_id": "adverse-media-11610",
+    "selection": "Deterministic stratified sampling from human-annotated examples",
+    "excluded_bundles": [
+      "datasets/adverse-media-public-tuning-2000",
+      "datasets/adverse-media-public-holdout-1000"
+    ],
+    "article_id_overlap_with_excluded_bundles": 0,
+    "normalized_article_overlap_with_excluded_bundles": 0,
+    "records": 1000,
+    "labels": {
+      "negative": 500,
+      "positive": 500
+    },
+    "unique_entities": 554,
+    "maximum_entity_reuse": 2,
+    "entity_cap": 2,
+    "unique_normalized_articles": 1000,
+    "label_policy": "Human annotated",
+    "class_label_source": "human",
+    "augmentation": "none; original entity/article pairs only"
+  }
+}
